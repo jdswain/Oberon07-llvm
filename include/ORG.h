@@ -131,13 +131,9 @@ void ORG_Assert(ORG_Item *x);
 void ORG_New(ORG_Item *x);
 void ORG_Pack(ORG_Item *x, ORG_Item *y);
 void ORG_Unpk(ORG_Item *x, ORG_Item *y);
-void ORG_IntEn(ORG_Item *x);
 void ORG_Get(ORG_Item *addr, ORG_Item *var);
 void ORG_Put(ORG_Item *addr, ORG_Item *val);
 void ORG_Copy(ORG_Item *x, ORG_Item *y, ORG_Item *z);
-void ORG_TRB(ORG_Item *x, ORG_Item *y);
-void ORG_TSB(ORG_Item *x, ORG_Item *y);
-void ORG_Exec(ORG_Item *addr, ORG_Item *bank);
 
 // Inline functions
 void ORG_Abs(ORG_Item *x);
@@ -150,10 +146,7 @@ void ORG_Shift(LONGINT fct, ORG_Item *x, ORG_Item *y);
 void ORG_Bitwise(LONGINT fct, ORG_Item *x, ORG_Item *y);
 void ORG_UML(ORG_Item *x, ORG_Item *y);
 void ORG_Bit(ORG_Item *x, ORG_Item *y);
-void ORG_HH(ORG_Item *x);
 void ORG_Adr(ORG_Item *x);
-void ORG_Bank(ORG_Item *x);
-void ORG_Condition(ORG_Item *x);
 
 // Module management functions
 void ORG_Open(const char *modid, INTEGER v);

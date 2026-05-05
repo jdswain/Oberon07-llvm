@@ -474,16 +474,6 @@ static void StandFunc(ORG_Item *x, LONGINT fct, ORB_Type *restyp) {
             } else {
                 ORS_Mark("must be a type");
             }
-        } else if (fct == 19) {  // COND
-            CheckConst(x);
-            CheckInt(x);
-            ORG_Condition(x);
-        } else if (fct == 20) {  // H
-            CheckConst(x);
-            CheckInt(x);
-            ORG_HH(x);
-        } else if (fct == 21) {  // BANK
-            ORG_Bank(x);
         }
         x->type = restyp;
     } else {
@@ -853,9 +843,6 @@ static void StandProc(LONGINT pno) {
 		CheckInt(&y);
 		CheckReadOnly(&x);
 		ORG_Unpk(&x, &y);
-	  } else if (pno == 9) {  // INTEN
-		CheckBool(&x);
-		ORG_IntEn(&x);
 	  } else if (pno == 10) {  // GET(addr, VAR var)
 		CheckInt(&x);
 		ORG_Get(&x, &y);
@@ -867,18 +854,6 @@ static void StandProc(LONGINT pno) {
 		CheckInt(&y);
 		CheckInt(&z);
 		ORG_Copy(&x, &y, &z);
-	  } else if (pno == 13) {  // TRB
-		CheckInt(&x);
-		CheckInt(&y);
-		ORG_TRB(&x, &y);
-	  } else if (pno == 14) {  // TSB
-		CheckInt(&x);
-		CheckInt(&y);
-		ORG_TSB(&x, &y);
-	  } else if (pno == 15) {  // EXEC(addr, bank)
-		CheckInt(&x);
-		CheckInt(&y);
-		ORG_Exec(&x, &y);
 	  }
 	} else {
 	  ORS_Mark("wrong nof parameters");

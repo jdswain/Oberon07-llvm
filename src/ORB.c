@@ -881,19 +881,12 @@ void ORB_Initialize(void) {
     systemScope = NULL;
     
     /* Functions */
-    enter("BANK", ORB_SFunc, intType, 211);
-    enter("H", ORB_SFunc, intType, 201);
-    enter("COND", ORB_SFunc, boolType, 191);
     enter("SIZE", ORB_SFunc, intType, 181);
     enter("ADR", ORB_SFunc, longType, 171);
     enter("VAL", ORB_SFunc, intType, 162);
     enter("BIT", ORB_SFunc, boolType, 142);
-    
+
     /* Procedures */
-    enter("EXEC", ORB_SProc, noType, 152);
-    enter("TSB", ORB_SProc, noType, 142);
-    enter("TRB", ORB_SProc, noType, 132);
-    enter("INTEN", ORB_SProc, noType, 91);
     enter("COPY", ORB_SProc, noType, 123);
     enter("PUT", ORB_SProc, noType, 112);
     enter("GET", ORB_SProc, noType, 102);

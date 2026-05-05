@@ -1798,7 +1798,6 @@ void ORG_New(ORG_Item *x) {
 }
 void ORG_Pack(ORG_Item *x, ORG_Item *y) { EmittedStmts++; (void)x; (void)y; }
 void ORG_Unpk(ORG_Item *x, ORG_Item *y) { EmittedStmts++; (void)x; (void)y; }
-void ORG_IntEn(ORG_Item *x) { EmittedStmts++; (void)x; }
 
 // Helper for SYSTEM.GET/PUT/COPY: convert an integer-valued address Item
 // into an LLVM `ptr`. INTEGER (i32) gets zero-extended to i64 first to
@@ -1841,10 +1840,6 @@ void ORG_Copy(ORG_Item *src, ORG_Item *dst, ORG_Item *n) {
     }
     LLVMBuildMemCpy(Bld, dp, 0, sp, 0, nv);
 }
-void ORG_TRB(ORG_Item *x, ORG_Item *y) { EmittedStmts++; (void)x; (void)y; }
-void ORG_TSB(ORG_Item *x, ORG_Item *y) { EmittedStmts++; (void)x; (void)y; }
-void ORG_Exec(ORG_Item *addr, ORG_Item *bank) { EmittedStmts++; (void)addr; (void)bank; }
-
 void ORG_Abs(ORG_Item *x) {
     LLVMValueRef v = LoadItem(x);
     if (x->type && x->type->form == ORB_Real) {
@@ -1973,7 +1968,6 @@ void ORG_Bit(ORG_Item *x, ORG_Item *y) {
     x->type = boolType;
     x->backend = LLVMBuildICmp(Bld, LLVMIntNE, m, LLVMConstInt(Ty_i32, 0, 0), "bit");
 }
-void ORG_HH(ORG_Item *x) { (void)x; }
 void ORG_Adr(ORG_Item *x) {
     x->type = longType;
     x->orig_type = longType;
@@ -1984,19 +1978,6 @@ void ORG_Adr(ORG_Item *x) {
         x->backend = LLVMConstInt(Ty_i64, 0, 0);
     }
 }
-void ORG_Bank(ORG_Item *x) {
-    x->type = intType;
-    x->orig_type = intType;
-    x->mode = ORB_Const;
-    x->a = 0;
-    x->backend = NULL;
-}
-void ORG_Condition(ORG_Item *x) {
-    x->mode = Cond;
-    x->type = boolType;
-    x->backend = LLVMConstInt(Ty_i1, 0, 0);
-}
-
 // --- Module lifecycle ---
 void ORG_Open(const char *modid, INTEGER v) {
     (void)v;
