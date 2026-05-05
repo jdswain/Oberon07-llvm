@@ -1,0 +1,38 @@
+# Build artifacts
+build/
+bin/
+
+# Compiler intermediates and outputs
+*.o
+*.d
+*.ll
+*.smb
+*.deps
+*.dylib
+*.dSYM/
+
+# Test executables (built from TestHost.Mod by oc -o testhost)
+tests/testhost
+tests/oc_files_test.dat
+
+# Legacy per-test executables built before the framework consolidated them
+tests/*_test
+tests/*_test2
+tests/*_prog
+tests/*_prog2
+
+# Stray run-output captures
+tests/out.txt
+
+# Emacs auto-save files
+\#*\#
+.\#*
+
+# Editor / OS noise
+*~
+.DS_Store
+
+# Local agent / IDE state
+.claude/
+.vscode/
+.idea/
