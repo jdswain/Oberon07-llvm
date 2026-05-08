@@ -140,3 +140,24 @@ void oc_release_array_fields(void *p, int64_t n, int64_t elem_size, void *elem_t
         oc_release_fields((char *)p + i * elem_size, elem_td);
     }
 }
+
+/* Process argv stash. The compiler-emitted entry stub calls oc_set_args
+ * before invoking <Module>__init, so module bodies and any later code
+ * can read argv via oc_argc / oc_argv. Argument strings stay owned by
+ * the OS; we just keep the pointers. */
+static int    oc_args_argc = 0;
+static char **oc_args_argv = NULL;
+
+void oc_set_args(int argc, char **argv) {
+    oc_args_argc = argc;
+    oc_args_argv = argv;
+}
+
+int oc_argc(void) {
+    return oc_args_argc;
+}
+
+const char *oc_argv(int i) {
+    if (i < 0 || i >= oc_args_argc || oc_args_argv == NULL) return "";
+    return oc_args_argv[i];
+}

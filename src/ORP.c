@@ -2393,9 +2393,10 @@ static int oc_link(const char *self_argv0, const char *output,
             return 1;
         }
         fprintf(mf,
+            "extern void oc_set_args(int, char **);\n"
             "extern void %s__init(void);\n"
             "int main(int argc, char **argv) {\n"
-            "    (void)argc; (void)argv;\n"
+            "    oc_set_args(argc, argv);\n"
             "    %s__init();\n"
             "    return 0;\n"
             "}\n", entry, entry);
