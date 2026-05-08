@@ -60,6 +60,18 @@ MODULE Files;
   BEGIN
   END Rename;
 
+  (* 1 if the named filesystem entry exists (file, dir, link, ...),
+     0 otherwise. INTEGER for ABI simplicity. *)
+  PROCEDURE Exists*(name: ARRAY OF CHAR): INTEGER;
+  BEGIN RETURN 0
+  END Exists;
+
+  (* mkdir -p: create `name` and any missing parent directories.
+     res = 0 on success, non-zero on failure other than already-exists. *)
+  PROCEDURE MakeDir*(name: ARRAY OF CHAR; VAR res: INTEGER);
+  BEGIN
+  END MakeDir;
+
   PROCEDURE Length*(f: File): INTEGER;
   BEGIN RETURN 0
   END Length;

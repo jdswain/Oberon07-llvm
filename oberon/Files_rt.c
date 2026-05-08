@@ -202,6 +202,44 @@ void Files__Rename(const char *oldn, int old_len,
     else *res = 1;
 }
 
+/* Exists: 1 if the path resolves to an existing filesystem entry
+ * (file, dir, symlink, ...), 0 otherwise. Uses INTEGER return rather
+ * than BOOLEAN to keep the C / Oberon ABI uncomplicated. */
+int Files__Exists(const char *name, int name_len) {
+    char path[PATH_MAX];
+    copy_name(name, name_len, path, sizeof(path));
+    struct stat st;
+    return stat(path, &st) == 0 ? 1 : 0;
+}
+
+/* mkdir -p: create `path` and any missing parent dirs. Returns 0
+ * on success, non-zero on the first error other than EEXIST. */
+static int files_mkdir_p(const char *path) {
+    if (!path || !*path) return 0;
+    char buf[PATH_MAX];
+    size_t n = strlen(path);
+    if (n >= sizeof(buf)) return -1;
+    memcpy(buf, path, n + 1);
+    /* Strip trailing slash unless the whole path is "/". */
+    if (n > 1 && buf[n-1] == '/') { buf[n-1] = 0; n--; }
+    /* Walk each prefix, mkdir as we go. */
+    for (size_t i = 1; i < n; i++) {
+        if (buf[i] == '/') {
+            buf[i] = 0;
+            if (mkdir(buf, 0755) != 0 && errno != EEXIST) return -1;
+            buf[i] = '/';
+        }
+    }
+    if (mkdir(buf, 0755) != 0 && errno != EEXIST) return -1;
+    return 0;
+}
+
+void Files__MakeDir(const char *name, int name_len, int *res) {
+    char path[PATH_MAX];
+    copy_name(name, name_len, path, sizeof(path));
+    *res = files_mkdir_p(path) == 0 ? 0 : 1;
+}
+
 int Files__Length(FileDesc *f) {
     if (!f) return 0;
     FileBuf *b = (FileBuf *)(intptr_t)f->handle;
