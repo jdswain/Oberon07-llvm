@@ -18,4 +18,8 @@ MODULE Env;
   BEGIN
   END Arg;
 
+  PROCEDURE Cwd*(VAR s: ARRAY OF CHAR);
+  BEGIN
+  END Cwd;
+
 END Env.
