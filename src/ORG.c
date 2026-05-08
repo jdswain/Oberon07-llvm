@@ -525,6 +525,14 @@ static LLVMValueRef ConstOfType(ORB_Type *typ, LONGINT v) {
 // Get x as an LLVM Value (loading from memory if needed).
 static LLVMValueRef LoadItem(ORG_Item *x) {
     if (x->mode == ORB_Const) {
+        // Procedure constants carry their LLVM function pointer in
+        // x->backend (set by ORG_MakeItem via LookupProc). The generic
+        // ConstOfType path collapses any pointer type to NULL, which
+        // turns `procVar := someProc` and `Call(someProc)` into NIL
+        // stores. Short-circuit to the function address when available.
+        if (x->type && x->type->form == ORB_Proc && x->backend) {
+            return (LLVMValueRef)x->backend;
+        }
         return ConstOfType(x->type, x->a);
     }
     if (x->mode == Reg || x->mode == Cond) {
