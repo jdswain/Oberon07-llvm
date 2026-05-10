@@ -1,5 +1,5 @@
 MODULE TestHost;
-  IMPORT Out, Modules, TestRunner, Files, FileDir,
+  IMPORT Out, Modules, TestRunner, Files, FileDir, Env,
          Branch, Loops, Cases, Short, Chain,
          Sets, Reals, Types, Guards, Guards2,
          Arrs, Recs, RecCopy, Strings, StrPass, Open,
@@ -55,6 +55,7 @@ BEGIN
   RunPlugin("MixTests");
   RunPlugin("MathTests");
   RunPlugin("FilesTests");
+  RunPlugin("EnvTests");
 
   Out.WriteString("======================="); Out.Ln();
   Out.WriteString("TOTAL: ");
