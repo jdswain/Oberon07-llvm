@@ -1263,6 +1263,19 @@ void ORG_For0(ORG_Item *x, ORG_Item *y) {
     LLVMBuildStore(Bld, rhs, LValueItem(x));
 }
 
+// Force an item to its current value as a Reg-mode item. After this,
+// LoadItem(x) returns the stashed value without re-emitting a load.
+// Used by the FOR parser to evaluate the upper bound exactly once at
+// loop entry — without it, the bound would be reloaded inside every
+// iteration's test block and a body that mutates the bound would
+// extend the loop, contrary to Oberon-07 semantics.
+void ORG_Snapshot(ORG_Item *x) {
+    LLVMValueRef v = LoadItem(x);
+    x->mode = Reg;
+    x->backend = v;
+    x->b = 0;
+}
+
 void ORG_For1(ORG_Item *x, ORG_Item *y, ORG_Item *z, ORG_Item *w, LONGINT *L) {
     (void)y;
     LLVMValueRef xv = LoadItem(x);

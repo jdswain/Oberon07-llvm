@@ -1100,10 +1100,16 @@ static void StatSequence(void) {
                     expression(&y);
                     CheckInt(&y);
                     ORG_For0(&x, &y);
-                    L0 = ORG_Here();
                     Check(ORS_to, "no TO");
                     expression(&z);
                     CheckInt(&z);
+                    /* Snapshot the upper bound now, before opening the
+                       loop-top block — Oberon-07 evaluates both bounds
+                       once at loop entry. Without this, a Var-mode `z`
+                       gets reloaded on every iteration's test, so
+                       writes to it inside the body would extend the
+                       range. */
+                    ORG_Snapshot(&z);
                     obj->rdo = TRUE;
                     if (sym == ORS_by) {
                         ORS_Get(&sym);
@@ -1114,6 +1120,7 @@ static void StatSequence(void) {
                         ORG_MakeConstItem(&w, intType, 1);
                     }
                     Check(ORS_do, "no DO");
+                    L0 = ORG_Here();
                     ORG_For1(&x, &y, &z, &w, &L1);
                     StatSequence();
                     Check(ORS_end, "no END");

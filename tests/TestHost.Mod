@@ -5,7 +5,7 @@ MODULE TestHost;
          Arrs, Recs, RecCopy, Strings, StrPass, Open,
          StackRec, ArrPtrs, Arc, ArcCons, Weak, Tree,
          App, Util, Diamond, A, B, Counter, Mix, Math,
-         Repeat, While;
+         Repeat, While, For;
 
   VAR totalPassed, totalFailed: INTEGER;
 
@@ -32,6 +32,7 @@ BEGIN
   RunPlugin("LoopsTests");
   RunPlugin("RepeatTests");
   RunPlugin("WhileTests");
+  RunPlugin("ForTests");
   RunPlugin("CasesTests");
   RunPlugin("ShortTests");
   RunPlugin("ChainTests");
