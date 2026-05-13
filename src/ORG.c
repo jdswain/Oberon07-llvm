@@ -1396,6 +1396,10 @@ void ORG_BJump(LONGINT L) {
 }
 
 void ORG_CBJump(ORG_Item *x, LONGINT L) {
+    /* Emitted at the bottom of `REPEAT body UNTIL cond` — branch back
+       to the loop head L when cond is FALSE, fall through to cont
+       when cond is TRUE. Same false-back semantics as NW's original
+       RISC `BNZ L` for the UNTIL terminator. */
     EmittedStmts++;
     LLVMValueRef cond = LoadItem(x);
     LLVMTypeRef ct = LLVMTypeOf(cond);
@@ -1404,7 +1408,7 @@ void ORG_CBJump(ORG_Item *x, LONGINT L) {
     }
     LLVMBasicBlockRef cont = append_block("cb_cont");
     if ((int)L > 0 && (int)L <= LabelCount) {
-        LLVMBuildCondBr(Bld, cond, Labels[(int)L].bb, cont);
+        LLVMBuildCondBr(Bld, cond, cont, Labels[(int)L].bb);
     } else {
         LLVMBuildCondBr(Bld, cond, cont, cont);
     }

@@ -4,7 +4,8 @@ MODULE TestHost;
          Sets, Reals, Types, Guards, Guards2,
          Arrs, Recs, RecCopy, Strings, StrPass, Open,
          StackRec, ArrPtrs, Arc, ArcCons, Weak, Tree,
-         App, Util, Diamond, A, B, Counter, Mix, Math;
+         App, Util, Diamond, A, B, Counter, Mix, Math,
+         Repeat;
 
   VAR totalPassed, totalFailed: INTEGER;
 
@@ -29,6 +30,7 @@ BEGIN
 
   RunPlugin("BranchTests");
   RunPlugin("LoopsTests");
+  RunPlugin("RepeatTests");
   RunPlugin("CasesTests");
   RunPlugin("ShortTests");
   RunPlugin("ChainTests");
