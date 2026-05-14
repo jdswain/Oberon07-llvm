@@ -2265,7 +2265,8 @@ static int scan_imports(const char *source_dir, const char *modname,
 
 // True iff the module's .Mod (in user dir or runtime dir) is newer than
 // its .smb / .o sitting next to it, or those outputs are missing.
-static int needs_compile(const char *source_dir, const char *modname) {
+static int needs_compile(const char *source_dir, const char *modname,
+                         BOOLEAN want_wasm) {
     char mod_path[512];
     if (locate_module_source(source_dir, modname, mod_path, sizeof(mod_path)) != 0) {
         return 0;   // can't find source — caller will get import errors
@@ -2290,8 +2291,24 @@ static int needs_compile(const char *source_dir, const char *modname) {
     if (stat(mod_path, &mod_st) != 0) return 0;
     if (stat(smb_path, &smb_st) != 0) return 1;
     if (stat(o_path,   &o_st)   != 0) return 1;
-    return mod_st.st_mtime > smb_st.st_mtime
-        || mod_st.st_mtime > o_st.st_mtime;
+    if (mod_st.st_mtime > smb_st.st_mtime || mod_st.st_mtime > o_st.st_mtime) {
+        return 1;
+    }
+    /* Target mismatch: peek at the .o's first 4 bytes to tell wasm
+       (`\0asm`) from Mach-O / ELF. Force rebuild if it disagrees with
+       the requested target. */
+    FILE *fp = fopen(o_path, "rb");
+    if (fp) {
+        unsigned char magic[4] = {0};
+        size_t n = fread(magic, 1, 4, fp);
+        fclose(fp);
+        if (n == 4) {
+            BOOLEAN is_wasm = (magic[0] == 0 && magic[1] == 'a' &&
+                                magic[2] == 's' && magic[3] == 'm');
+            if (is_wasm != want_wasm) return 1;
+        }
+    }
+    return 0;
 }
 
 static void derive_source_dir(const char *fname, char *out, size_t outsz) {
@@ -2310,7 +2327,7 @@ static void derive_source_dir(const char *fname, char *out, size_t outsz) {
 }
 
 static int ensure_compiled(const char *self_argv0, const char *source_dir,
-                           const char *name,
+                           const char *name, const char *target,
                            char visited[][MAX_LINK_NAME], int *nv) {
     for (int i = 0; i < *nv; i++) {
         if (strcmp(visited[i], name) == 0) return 0;
@@ -2326,18 +2343,24 @@ static int ensure_compiled(const char *self_argv0, const char *source_dir,
     char imps[MAX_LINK_MODS][MAX_LINK_NAME];
     int nimp = scan_imports(source_dir, name, imps, MAX_LINK_MODS);
     for (int i = 0; i < nimp; i++) {
-        if (ensure_compiled(self_argv0, source_dir, imps[i], visited, nv) != 0) {
+        if (ensure_compiled(self_argv0, source_dir, imps[i], target, visited, nv) != 0) {
             return 1;
         }
     }
 
-    if (needs_compile(source_dir, name)) {
+    BOOLEAN want_wasm = target && strstr(target, "wasm");
+    if (needs_compile(source_dir, name, want_wasm)) {
         char src_path[512];
         if (locate_module_source(source_dir, name, src_path, sizeof(src_path)) != 0) {
             return 0;   // not found anywhere — let the import phase complain
         }
         char cmd[1024];
-        snprintf(cmd, sizeof(cmd), "'%s' '%s'", self_argv0, src_path);
+        if (target) {
+            snprintf(cmd, sizeof(cmd), "'%s' -target '%s' '%s'",
+                     self_argv0, target, src_path);
+        } else {
+            snprintf(cmd, sizeof(cmd), "'%s' '%s'", self_argv0, src_path);
+        }
         int rc = system(cmd);
         if (rc != 0) {
             fprintf(stderr, "oc: failed to compile %s (rc=%d)\n", name, rc);
@@ -2349,7 +2372,9 @@ static int ensure_compiled(const char *self_argv0, const char *source_dir,
 
 static int oc_link(const char *self_argv0, const char *output,
                    const char *entry, BOOLEAN include_runtime,
-                   BOOLEAN shared, int n_extras, char **extras) {
+                   BOOLEAN shared, const char *target,
+                   int n_extras, char **extras) {
+    BOOLEAN is_wasm = target && strstr(target, "wasm");
     char modules[MAX_LINK_MODS][MAX_LINK_NAME];
     int  nmod = 0;
     char queue[MAX_LINK_MODS][MAX_LINK_NAME];
@@ -2412,11 +2437,28 @@ static int oc_link(const char *self_argv0, const char *output,
 
     // Build the clang command line. Single-quoted args handle spaces.
     char cmd[8192];
-    // -shared: produce a dylib whose unresolved symbols are looked up by
-    // dyld at load time against the host process. The runtime / imports
-    // need to be statically linked into the host (or loaded ahead of us).
     int p;
-    if (shared) {
+    if (is_wasm) {
+        /* Static-only WASI build — wasm32 can't do dynamic linking the
+         * way Mach-O does, so -shared is rejected upstream. We invoke
+         * Homebrew's clang explicitly because macOS's /usr/bin/clang
+         * has no WebAssembly backend. Paths are Homebrew defaults;
+         * override via OC_WASM_CLANG / OC_WASI_SYSROOT /
+         * OC_WASI_RESOURCE_DIR env vars. */
+        const char *wclang = getenv("OC_WASM_CLANG");
+        if (!wclang)  wclang  = "/opt/homebrew/opt/llvm/bin/clang";
+        const char *sysroot = getenv("OC_WASI_SYSROOT");
+        if (!sysroot) sysroot = "/opt/homebrew/opt/wasi-libc/share/wasi-sysroot";
+        const char *resdir = getenv("OC_WASI_RESOURCE_DIR");
+        if (!resdir)  resdir  = "/opt/homebrew/opt/wasi-runtimes/share/wasi-runtimes";
+        p = snprintf(cmd, sizeof(cmd),
+            "'%s' --target=%s --sysroot='%s' -resource-dir='%s' -o '%s' '%s'",
+            wclang, target, sysroot, resdir, output, main_path);
+    } else if (shared) {
+        // -shared: produce a dylib whose unresolved symbols are looked
+        // up by dyld at load time against the host process. The
+        // runtime / imports need to be statically linked into the host
+        // (or loaded ahead of us).
         p = snprintf(cmd, sizeof(cmd),
             "clang -shared -Wl,-undefined,dynamic_lookup -o '%s'", output);
     } else {
@@ -2506,6 +2548,7 @@ int main(int argc, char **argv) {
     bool do_link = false;       // set by -o
     bool include_runtime = true;// override with --no-runtime
     bool shared = false;        // -shared: build a dylib instead of an exe
+    const char *target = NULL;  // -target wasm32-wasi: cross-compile
     int i;
 
     if (argc < 2) {
@@ -2533,6 +2576,11 @@ int main(int argc, char **argv) {
             include_runtime = false;
         } else if (strcmp(argv[i], "-shared") == 0) {
             shared = true;
+        } else if (strcmp(argv[i], "-target") == 0) {
+            if (i + 1 < argc) target = argv[++i];
+            else { fprintf(stderr, "oc: -target expects an argument\n"); return 1; }
+        } else if (strncmp(argv[i], "-target=", 8) == 0) {
+            target = argv[i] + 8;
         } else if (strcmp(argv[i], "-o") == 0) {
             if (i + 1 < argc) { output = argv[++i]; do_link = true; }
             else { fprintf(stderr, "oc: -o expects an argument\n"); return 1; }
@@ -2554,6 +2602,15 @@ int main(int argc, char **argv) {
     if (!emit_obj && do_link) {
         fprintf(stderr, "oc: -S and -o are incompatible (need .o to link)\n");
         return 1;
+    }
+
+    // Accept short target aliases. "wasm32" or "wasm" map to
+    // wasm32-wasip1 — wasi-libc's current preferred name.
+    if (target) {
+        if (strcmp(target, "wasm32") == 0 || strcmp(target, "wasm") == 0) {
+            target = "wasm32-wasip1";
+        }
+        ORG_SetTargetTriple(target);
     }
 
     // Locate the runtime modules directory (oberon/ next to bin/oc) and
@@ -2581,7 +2638,7 @@ int main(int argc, char **argv) {
         int nimp = scan_imports(source_dir_buf, entry_modid, main_imps, MAX_LINK_MODS);
         for (int j = 0; j < nimp; j++) {
             if (ensure_compiled(argv[0], source_dir_buf,
-                                main_imps[j], visited, &nv) != 0) {
+                                main_imps[j], target, visited, &nv) != 0) {
                 return 1;
             }
         }
@@ -2619,7 +2676,7 @@ int main(int argc, char **argv) {
         char modid_buf[64];
         modid_from_filename(filename, modid_buf, sizeof(modid_buf));
         return oc_link(argv[0], output, modid_buf,
-                       include_runtime, shared, n_extras, extras);
+                       include_runtime, shared, target, n_extras, extras);
     }
     return 0;
 }

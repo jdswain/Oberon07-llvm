@@ -65,6 +65,14 @@ static LLVMTypeRef Ty_TDPrefix;
 // generated .ll is self-describing; HostTM is kept alive so ORG_Close can
 // emit a native .o directly without shelling out to llc.
 static char               *HostTriple = NULL;
+/* Optional target-triple override set by the driver via
+ * ORG_SetTargetTriple() before the first ORG_Open(). When NULL we use
+ * LLVMGetDefaultTargetTriple(). */
+static const char         *TargetOverride = NULL;
+
+void ORG_SetTargetTriple(const char *triple) {
+    TargetOverride = triple;  /* caller retains ownership */
+}
 static char               *HostLayout = NULL;
 static LLVMTargetMachineRef HostTM    = NULL;
 
@@ -2031,19 +2039,37 @@ void ORG_Open(const char *modid, INTEGER v) {
             Ty_TDPrefix = LLVMStructTypeInContext(Ctx, td_fields, 4, 0);
         }
 
-        // One-shot host-target setup so each module carries the correct
-        // triple/layout AND so we can emit a native .o object file without
-        // an external `llc` invocation. PIC reloc model is needed for
-        // dynamic-linker-friendly object files on darwin.
-        LLVMInitializeNativeTarget();
-        LLVMInitializeNativeAsmPrinter();
-        HostTriple = LLVMGetDefaultTargetTriple();
+        // One-shot target setup so each module carries the correct
+        // triple/layout AND so we can emit a native .o object file
+        // without an external `llc` invocation. The driver may have
+        // called ORG_SetTargetTriple() with an override (e.g.
+        // "wasm32-wasi"); otherwise we pick up the host default.
+        if (TargetOverride) {
+            /* WebAssembly only — extend here when adding more cross
+               targets. We always init the host too so a mixed run can
+               still emit native artifacts for itself. */
+            LLVMInitializeNativeTarget();
+            LLVMInitializeNativeAsmPrinter();
+            LLVMInitializeWebAssemblyTargetInfo();
+            LLVMInitializeWebAssemblyTarget();
+            LLVMInitializeWebAssemblyTargetMC();
+            LLVMInitializeWebAssemblyAsmPrinter();
+            HostTriple = strdup(TargetOverride);
+        } else {
+            LLVMInitializeNativeTarget();
+            LLVMInitializeNativeAsmPrinter();
+            HostTriple = LLVMGetDefaultTargetTriple();
+        }
         LLVMTargetRef tgt = NULL;
         char *err = NULL;
+        /* wasm32 doesn't support PIC; default static reloc. Host
+           (Mach-O) needs PIC so dynamic_lookup-resolved dylibs work. */
+        LLVMRelocMode reloc = (HostTriple && strstr(HostTriple, "wasm"))
+                                ? LLVMRelocStatic : LLVMRelocPIC;
         if (HostTriple && LLVMGetTargetFromTriple(HostTriple, &tgt, &err) == 0 && tgt) {
             HostTM = LLVMCreateTargetMachine(
                 tgt, HostTriple, "", "",
-                LLVMCodeGenLevelDefault, LLVMRelocPIC, LLVMCodeModelDefault);
+                LLVMCodeGenLevelDefault, reloc, LLVMCodeModelDefault);
             if (HostTM) {
                 LLVMTargetDataRef dl = LLVMCreateTargetDataLayout(HostTM);
                 HostLayout = LLVMCopyStringRepOfTargetData(dl);

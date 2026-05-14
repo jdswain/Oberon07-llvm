@@ -148,6 +148,7 @@ void ORG_UML(ORG_Item *x, ORG_Item *y);
 void ORG_Bit(ORG_Item *x, ORG_Item *y);
 void ORG_Adr(ORG_Item *x);
 void ORG_Snapshot(ORG_Item *x);
+void ORG_SetTargetTriple(const char *triple);
 
 // Module management functions
 void ORG_Open(const char *modid, INTEGER v);
