@@ -9,7 +9,7 @@ MODULE Files;
    bytewise fseek/fread/fwrite. There is no disk image, no B-tree, no
    page cache — that all collapses to the host filesystem. *)
 
-  CONST FnLength* = 32;
+  CONST FnLength* = 256;
 
   TYPE
     File* = POINTER TO FileDesc;

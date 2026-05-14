@@ -25,13 +25,18 @@
 #include <time.h>
 
 /* Match the FileDesc layout the compiler emits:
- *   { ptr _tag, i64 _rc, i64 handle, [32 x i8] name,
- *     i32 length, i32 date, i1 registered } */
+ *   { ptr _tag, i64 _rc, i64 handle, [256 x i8] name,
+ *     i32 length, i32 date, i1 registered }
+ *
+ * Files.FnLength was bumped from 32 to 256 so paths longer than the
+ * old 31-char ceiling no longer get silently truncated by strncpy
+ * into f->name. Anything longer than this still truncates rather
+ * than overflows. */
 typedef struct FileDesc {
     void   *_tag;
     int64_t _rc;
     int64_t handle;       /* (FileBuf *) cast to int64 */
-    char    name[32];
+    char    name[256];
     int     length;
     int     date;
     int8_t  registered;   /* i1 stored as i8 */
