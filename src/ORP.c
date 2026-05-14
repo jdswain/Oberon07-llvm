@@ -2117,43 +2117,71 @@ void ORP_Compile(const char *filename, bool forceNewSF) {
 // a fallback when a module isn't in the user's source directory.
 static char RuntimeDir[1024] = "";
 
-static void resolve_runtime_dir(const char *self_argv0) {
+/* Pick the runtime modules subdirectory based on the active target.
+ * wasm32 → runtime/wasm/, everything else → runtime/posix/. Both live
+ * next to or one level above the compiler binary so the same lookup
+ * works from `bin/oc` (../runtime) or a flat install (./runtime). */
+static void resolve_runtime_dir(const char *self_argv0, const char *target) {
     char self_abs[1024];
     if (realpath(self_argv0, self_abs) == NULL) return;
     char *last_slash = strrchr(self_abs, '/');
     if (!last_slash) return;
     *last_slash = 0;
-    static const char *layouts[] = { "/../oberon/", "/oberon/", NULL };
+    const char *flavor = (target && strstr(target, "wasm")) ? "wasm" : "posix";
+    /* Layouts to probe, in order. */
+    char tryp[1024];
+    const char *layouts[] = {
+        "/../runtime/%s/", "/runtime/%s/",
+        /* Backwards compat with the pre-split layout. */
+        "/../oberon/",     "/oberon/",
+        NULL,
+    };
     for (int i = 0; layouts[i]; i++) {
-        snprintf(RuntimeDir, sizeof(RuntimeDir), "%s%s", self_abs, layouts[i]);
+        if (strstr(layouts[i], "%s")) {
+            snprintf(tryp, sizeof(tryp), layouts[i], flavor);
+        } else {
+            snprintf(tryp, sizeof(tryp), "%s", layouts[i]);
+        }
+        snprintf(RuntimeDir, sizeof(RuntimeDir), "%s%s", self_abs, tryp);
         if (access(RuntimeDir, R_OK) == 0) return;
     }
     RuntimeDir[0] = 0;
 }
 
 // Find a runtime .c file relative to the running compiler binary.
-// Used for runtime.c (always included), Modules_rt.c (included when the
-// transitive import graph mentions the Modules module), etc.
+// Used for runtime.c (always included), Modules_rt.c (included when
+// the transitive import graph mentions the Modules module), etc. Uses
+// the same target-aware layout search as resolve_runtime_dir.
 static int find_runtime_file(const char *self_argv0, const char *basename,
+                             const char *target,
                              char *out, size_t outsz) {
     char self_abs[1024];
     if (realpath(self_argv0, self_abs) == NULL) return -1;
     char *last_slash = strrchr(self_abs, '/');
     if (!last_slash) return -1;
     *last_slash = 0;
-    static const char *layouts[] = {
-        "/../oberon/", "/oberon/", "/", NULL,
+    const char *flavor = (target && strstr(target, "wasm")) ? "wasm" : "posix";
+    char tryp[1024];
+    const char *layouts[] = {
+        "/../runtime/%s/", "/runtime/%s/",
+        "/../oberon/",     "/oberon/",     "/",
+        NULL,
     };
     for (int i = 0; layouts[i]; i++) {
-        snprintf(out, outsz, "%s%s%s", self_abs, layouts[i], basename);
+        if (strstr(layouts[i], "%s")) {
+            snprintf(tryp, sizeof(tryp), layouts[i], flavor);
+        } else {
+            snprintf(tryp, sizeof(tryp), "%s", layouts[i]);
+        }
+        snprintf(out, outsz, "%s%s%s", self_abs, tryp, basename);
         if (access(out, R_OK) == 0) return 0;
     }
     return -1;
 }
 
-static int find_runtime_source(const char *self_argv0,
+static int find_runtime_source(const char *self_argv0, const char *target,
                                char *out, size_t outsz) {
-    return find_runtime_file(self_argv0, "runtime.c", out, outsz);
+    return find_runtime_file(self_argv0, "runtime.c", target, out, outsz);
 }
 
 // Auto-link helper: walks the transitive .deps closure rooted at entry,
@@ -2512,7 +2540,7 @@ static int oc_link(const char *self_argv0, const char *output,
         // resolve oc_alloc / oc_retain / oc_release against the host at
         // load time via -undefined dynamic_lookup.
         char rt_path[1024];
-        if (find_runtime_source(self_argv0, rt_path, sizeof(rt_path)) == 0) {
+        if (find_runtime_source(self_argv0, target, rt_path, sizeof(rt_path)) == 0) {
             p += snprintf(cmd + p, sizeof(cmd) - p, " '%s'", rt_path);
         } else {
             fprintf(stderr,
@@ -2521,14 +2549,15 @@ static int oc_link(const char *self_argv0, const char *output,
                 "unresolved. Pass --no-runtime to silence this and supply "
                 "your own implementation.\n", self_argv0);
         }
-        // For every module in the transitive import closure, look for an
-        // <Mod>_rt.c sidecar next to the runtime modules and link it in.
-        // This is how Modules / Files / Kernel / etc. get their strong
-        // overrides into the host without the user having to remember.
+        // For every module in the transitive import closure, look for
+        // an <Mod>_rt.c sidecar in the (target-aware) runtime modules
+        // directory and link it in. This is how Modules / Files /
+        // Kernel / etc. pick up their strong overrides without the
+        // user having to remember.
         for (int i = 0; i < nmod; i++) {
             char rt_name[256], rt_path[1024];
             snprintf(rt_name, sizeof(rt_name), "%s_rt.c", modules[i]);
-            if (find_runtime_file(self_argv0, rt_name, rt_path, sizeof(rt_path)) == 0) {
+            if (find_runtime_file(self_argv0, rt_name, target, rt_path, sizeof(rt_path)) == 0) {
                 p += snprintf(cmd + p, sizeof(cmd) - p, " '%s'", rt_path);
             }
         }
@@ -2638,7 +2667,7 @@ int main(int argc, char **argv) {
     // Locate the runtime modules directory (oberon/ next to bin/oc) and
     // add it as a symbol-file search path so importers can find Out.smb,
     // Modules.smb, etc., without explicit -I flags.
-    resolve_runtime_dir(argv[0]);
+    resolve_runtime_dir(argv[0], target);
     if (RuntimeDir[0]) AddSearchPath(RuntimeDir);
 
     if (filename == NULL) {
