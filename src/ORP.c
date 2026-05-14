@@ -2188,7 +2188,7 @@ static int find_runtime_source(const char *self_argv0, const char *target,
 // generates a tiny C main() that calls <entry>__init(), and shells out to
 // clang to produce a native binary linking entry.ll, all transitive .ll
 // files, and any user-supplied extras (.c / .o / -lfoo / etc).
-#define MAX_LINK_MODS 64
+#define MAX_LINK_MODS 256
 #define MAX_LINK_NAME 64
 
 static BOOLEAN list_has(char names[][MAX_LINK_NAME], int n, const char *s) {

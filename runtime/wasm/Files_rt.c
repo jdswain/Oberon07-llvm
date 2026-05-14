@@ -37,8 +37,8 @@ void Files__Rename(const char *oldn, int old_len,
 int Files__Length(FileDesc *f) { (void)f; return 0; }
 int Files__Date  (FileDesc *f) { (void)f; return 0; }
 
-void Files__Exists(const char *name, int name_len, int *res) {
-    (void)name; (void)name_len; if (res) *res = 0;
+int Files__Exists(const char *name, int name_len) {
+    (void)name; (void)name_len; return 0;
 }
 void Files__MakeDir(const char *name, int name_len, int *res) {
     (void)name; (void)name_len; if (res) *res = 1;
