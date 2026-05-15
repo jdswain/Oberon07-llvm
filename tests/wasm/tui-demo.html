@@ -1,0 +1,73 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>oc wasm TUI demo</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #1e1e1e; color: #eee; margin: 1em; }
+  #term {
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    white-space: pre;
+    background: #000;
+    color: #eee;
+    padding: 0.5em;
+    border: 1px solid #444;
+    min-height: 24em;
+    min-width: 80ch;
+    outline: none;
+    cursor: text;
+  }
+  #term:focus { border-color: #88f; }
+  small { color: #888; }
+</style>
+
+<h1>oc wasm TUI demo</h1>
+<p>Click the terminal area to focus, then load a wasm module that
+   imports the <code>tui::*</code> functions.</p>
+
+<div id="term" tabindex="0" data-char-w="8" data-char-h="16"></div>
+<p><small>The HTML element receives keydown events and pushes codes
+   into the shim's queue; <code>tui::read_key</code> drains them
+   one per call.</small></p>
+
+<p>
+  <button id="load">Load tuidemo.wasm</button>
+  <span id="status"></span>
+</p>
+
+<script type="module">
+import { makeTuiShim, instantiateWithTui } from "./tui-shim.js";
+
+const status = document.getElementById("status");
+const term   = document.getElementById("term");
+const shim   = makeTuiShim(term);
+
+// WASI is also needed because oc-emitted modules call into wasi
+// for argv / proc_exit on entry. A minimal stub is enough — the
+// browser doesn't need real argv handling for this demo.
+const wasi = {
+    args_get:       () => 0,
+    args_sizes_get: (argcPtr, argvBufSizePtr) => {
+        const mem = new DataView(instance.exports.memory.buffer);
+        mem.setUint32(argcPtr, 0, true);
+        mem.setUint32(argvBufSizePtr, 0, true);
+        return 0;
+    },
+    proc_exit:      (code) => { status.textContent = `exited ${code}`; },
+};
+
+let instance = null;
+document.getElementById("load").addEventListener("click", async () => {
+    status.textContent = "loading…";
+    try {
+        const r = await instantiateWithTui(
+            fetch("tuidemo.wasm"),
+            shim,
+            { wasi_snapshot_preview1: wasi });
+        instance = r.instance;
+        instance.exports._start();
+        status.textContent = "ran";
+    } catch (e) {
+        status.textContent = `error: ${e}`;
+        console.error(e);
+    }
+});
+</script>
