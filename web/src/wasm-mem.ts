@@ -74,3 +74,15 @@ export function wasmAlloc(n: number): number {
   if (typeof fn !== "function") throw new Error("oc_wasm_alloc missing");
   return (fn as (n: number) => number)(n);
 }
+
+/** Dispatch a key into the wasm — calls the TUI runtime's
+ *  oc_dispatch_key export, which invokes whatever handler the
+ *  Oberon program registered via TUI.SetKeyHandler. Returns true
+ *  if the export was present and called. */
+export function dispatchKey(code: number): boolean {
+  if (!wasmExports) return false;
+  const fn = (wasmExports as Record<string, unknown>)["oc_dispatch_key"];
+  if (typeof fn !== "function") return false;
+  (fn as (k: number) => void)(code);
+  return true;
+}

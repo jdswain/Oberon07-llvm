@@ -147,6 +147,7 @@ void TUI__SetAttr(int attr) {
     if (attr & 4) out_str("\x1b[3m");     /* italic — honoured by most
                                              modern terminals, ignored
                                              cleanly by older ones */
+    if (attr & 8) out_str("\x1b[4m");     /* underline */
 }
 
 /* Foreground / background colour. The palette is 8-entry to match
@@ -266,6 +267,27 @@ int TUI__ReadKey(void) {
         }
     }
     return 0x1b;
+}
+
+/* Registered key handler — a function pointer with the Oberon
+ * KeyHandler signature: takes an INTEGER, returns nothing. */
+static void (*key_handler)(int) = NULL;
+static int run_quit = 0;
+
+void TUI__SetKeyHandler(void (*h)(int)) {
+    key_handler = h;
+}
+
+void TUI__Quit(void) {
+    run_quit = 1;
+}
+
+void TUI__Run(void) {
+    run_quit = 0;
+    while (!run_quit) {
+        int k = TUI__ReadKey();
+        if (key_handler) key_handler(k);
+    }
 }
 
 void TUI__init(void) {

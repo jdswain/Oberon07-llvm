@@ -4,12 +4,13 @@
 // the IBM 3270 / 5250 family — close to ANSI but with a tighter
 // hue range so monochrome and colour displays look similar.
 
-import { readStr } from "./wasm-mem.js";
+import { readStr, dispatchKey } from "./wasm-mem.js";
 
-// ---- Attribute bits (must match TUI.Mod AttrNormal/Reverse/Bold/Italic)
-const ATTR_REVERSE = 1;
-const ATTR_BOLD    = 2;
-const ATTR_ITALIC  = 4;
+// ---- Attribute bits (must match TUI.Mod AttrReverse/Bold/Italic/Underline)
+const ATTR_REVERSE   = 1;
+const ATTR_BOLD      = 2;
+const ATTR_ITALIC    = 4;
+const ATTR_UNDERLINE = 8;
 
 // 3270-style palette. Index matches TUI.ColorBlack..ColorWhite;
 // -1 means "default" and triggers a CSS reset.
@@ -118,8 +119,9 @@ export function makeTuiShim(host: HTMLElement): TuiShim {
       sp.style.color           = fgOut;
       sp.style.backgroundColor = bgOut;
     }
-    if (c.attr & ATTR_BOLD)   sp.style.fontWeight = "bold";
-    if (c.attr & ATTR_ITALIC) sp.style.fontStyle  = "italic";
+    if (c.attr & ATTR_BOLD)      sp.style.fontWeight     = "bold";
+    if (c.attr & ATTR_ITALIC)    sp.style.fontStyle      = "italic";
+    if (c.attr & ATTR_UNDERLINE) sp.style.textDecoration = "underline";
     return sp;
   }
 
@@ -156,7 +158,15 @@ export function makeTuiShim(host: HTMLElement): TuiShim {
     } else if (e.key.length === 1) {
       code = e.key.charCodeAt(0);
     }
-    if (code) { keyQueue.push(code); e.preventDefault(); }
+    if (!code) return;
+    e.preventDefault();
+    // Event-driven path: dispatch straight into the wasm if it
+    // exports oc_dispatch_key (i.e. the program uses TUI.Run /
+    // TUI.SetKeyHandler). Otherwise fall back to the polling queue
+    // for programs that read with TUI.ReadKey directly.
+    if (!dispatchKey(code)) {
+      keyQueue.push(code);
+    }
   });
 
   const imports: WebAssembly.ModuleImports = {

@@ -27,6 +27,7 @@
  * proposal; for the prototype, callers poll. See tests/wasm/tui-shim.js
  * for a complete reference implementation. */
 
+#include <stddef.h>
 #include <stdint.h>
 
 /* Wasm-side declarations of the JS-provided imports. The
@@ -147,6 +148,34 @@ int TUI__ReadKey(void) {
     js_flush();   /* match posix runtime — flush pending output before
                      polling input so partial frames are visible */
     return js_read_key();
+}
+
+/* Registered key handler. On wasm the program calls SetKeyHandler
+ * then Run, and Run returns immediately. The JS host invokes the
+ * exported `oc_dispatch_key` (below) on each keydown, which calls
+ * the registered handler — flipping the polling model upside down
+ * so the wasm thread never blocks waiting for JS. */
+static void (*key_handler)(int) = NULL;
+
+void TUI__SetKeyHandler(void (*h)(int)) {
+    key_handler = h;
+}
+
+void TUI__Run(void) {
+    /* No loop. JS dispatches keys via oc_dispatch_key while wasm
+     * is suspended. */
+}
+
+void TUI__Quit(void) {
+    key_handler = NULL;
+    js_shutdown();
+}
+
+/* Exported for the JS shim to drive the handler from the browser's
+ * keydown event. */
+__attribute__((export_name("oc_dispatch_key")))
+void oc_dispatch_key(int k) {
+    if (key_handler) key_handler(k);
 }
 
 void TUI__init(void) {

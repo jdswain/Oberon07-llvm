@@ -58,10 +58,11 @@ MODULE TUI;
     KeyMetaP*      = 299;       (* M-p  : previous record (form view) *)
 
     (* Display attributes. Bit-OR together for SetAttr. *)
-    AttrNormal*  = 0;
-    AttrReverse* = 1;
-    AttrBold*    = 2;
-    AttrItalic*  = 4;
+    AttrNormal*    = 0;
+    AttrReverse*   = 1;
+    AttrBold*      = 2;
+    AttrItalic*    = 4;
+    AttrUnderline* = 8;
 
     (* Foreground / background palette. Eight-colour scheme modelled
        on the IBM 3270 / 5250 terminal families — limited but
@@ -77,6 +78,16 @@ MODULE TUI;
     ColorTurquoise* = 5;
     ColorYellow*    = 6;
     ColorWhite*     = 7;
+
+  TYPE
+    (* Callback type for the event-driven entry point. Run() invokes
+       the registered handler for each key the user presses. Replaces
+       the polling `WHILE ... TUI.ReadKey() ... END` idiom for code
+       that needs to run under wasm — there the wasm thread can't
+       loop without yielding to JS, so polling silently freezes the
+       browser. Posix still supports ReadKey() directly for code that
+       only ever runs on a real PTY. *)
+    KeyHandler* = PROCEDURE(k: INTEGER);
 
   VAR
     (* Terminal dimensions in cells. Updated by Init and Resize. *)
@@ -146,5 +157,24 @@ MODULE TUI;
   PROCEDURE ReadKey*(): INTEGER;
   BEGIN RETURN 0
   END ReadKey;
+
+  PROCEDURE SetKeyHandler*(h: KeyHandler);
+  BEGIN
+  END SetKeyHandler;
+
+  (* Run the program's event loop. On posix Run reads keys with
+     ReadKey and dispatches each to the registered handler — the
+     handler returns to drive the next iteration. On wasm Run is
+     immediate: it returns after registering the dispatch path, and
+     the browser's keydown handler calls into the wasm `oc_dispatch_key`
+     export to invoke the handler per event. The Oberon-level call
+     site is identical on both targets. *)
+  PROCEDURE Run*;
+  BEGIN
+  END Run;
+
+  PROCEDURE Quit*;
+  BEGIN
+  END Quit;
 
 END TUI.
