@@ -52,6 +52,14 @@ prepends it to every API call, so a page served at
 `/demo/oed/index.html` reads / writes under
 `<FileStore>/demo/oed/<path>` on the server.
 
+## Fonts
+
+`fonts/3270*.ttf` ship the [3270 font](https://github.com/rbanffy/3270font)
+by Ricardo Banffy et al., used unchanged. The font is licensed under
+the BSD-3-Clause and a copy of the licence lives at
+`fonts/LICENSE.txt`. The terminal `<div>` uses `"3270"` with a system
+monospace fallback for the few seconds before the webfont loads.
+
 ## Limitations
 
 - File I/O is synchronous XHR. Deprecated by browsers but the only

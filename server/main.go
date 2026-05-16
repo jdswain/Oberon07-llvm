@@ -86,10 +86,14 @@ func staticHandler(webDir, wasmDir string) http.Handler {
 		} else {
 			fsPath = filepath.Join(webDir, clean)
 			switch filepath.Ext(clean) {
-			case ".js":   w.Header().Set("Content-Type", "application/javascript")
-			case ".css":  w.Header().Set("Content-Type", "text/css")
-			case ".html": w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			case ".map":  w.Header().Set("Content-Type", "application/json")
+			case ".js":    w.Header().Set("Content-Type", "application/javascript")
+			case ".css":   w.Header().Set("Content-Type", "text/css")
+			case ".html":  w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			case ".map":   w.Header().Set("Content-Type", "application/json")
+			case ".ttf":   w.Header().Set("Content-Type", "font/ttf")
+			case ".otf":   w.Header().Set("Content-Type", "font/otf")
+			case ".woff":  w.Header().Set("Content-Type", "font/woff")
+			case ".woff2": w.Header().Set("Content-Type", "font/woff2")
 			}
 		}
 		http.ServeFile(w, r, fsPath)

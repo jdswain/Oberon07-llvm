@@ -2,14 +2,39 @@
 <meta charset="utf-8">
 <title>oc web port</title>
 <style>
+  /* The 3270 font from rbanffy/3270font — BSD-3-Clause. See
+     fonts/LICENSE.txt. Loaded as a webfont so the terminal looks
+     like the IBM 3270 we're emulating colour-wise. */
+  @font-face {
+    font-family: "3270";
+    src: url("fonts/3270-Regular.ttf") format("truetype");
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: "3270 Condensed";
+    src: url("fonts/3270Condensed-Regular.ttf") format("truetype");
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: "3270 SemiCondensed";
+    src: url("fonts/3270SemiCondensed-Regular.ttf") format("truetype");
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+  }
+
   :root { --tui-bg: #000; --tui-fg: #eee; --tui-cursor: #ffd000; }
   body { font-family: system-ui, sans-serif; background: #1e1e1e; color: #ccc; margin: 1em; }
   h1 { font-weight: 400; font-size: 1em; color: #888; margin: 0 0 0.5em 0; }
   small { color: #888; }
   #term {
-    font-family: ui-monospace, Menlo, Consolas, monospace;
-    font-size: 14px;
-    line-height: 1.2;
+    font-family: "3270", ui-monospace, Menlo, Consolas, monospace;
+    font-size: 18px;
+    line-height: 1.1;
     background: var(--tui-bg);
     color: var(--tui-fg);
     padding: 0.5em;
@@ -21,7 +46,7 @@
     white-space: pre;
   }
   #term:focus { border-color: #88f; }
-  #term div { line-height: 1.2; min-height: 1em; }
+  #term div { line-height: 1.1; min-height: 1em; }
 </style>
 
 <h1>oc web port — TUI bound to wasm, files proxied to the Go server</h1>
