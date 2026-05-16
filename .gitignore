@@ -12,6 +12,16 @@ bin/
 *.dSYM/
 *.wasm
 
+# Web port build artifacts
+web/dist/
+web/node_modules/
+web/app.wasm
+
+# Go server binary + local FileStore
+server/server
+server/store/
+/tmp/oc-demo-store/
+
 # Test executables (built from TestHost.Mod by oc -o testhost)
 tests/testhost
 tests/oc_files_test.dat

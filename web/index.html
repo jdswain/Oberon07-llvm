@@ -1,0 +1,38 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>oc web port</title>
+<style>
+  :root { --tui-bg: #000; --tui-fg: #eee; --tui-cursor: #ffd000; }
+  body { font-family: system-ui, sans-serif; background: #1e1e1e; color: #ccc; margin: 1em; }
+  h1 { font-weight: 400; font-size: 1em; color: #888; margin: 0 0 0.5em 0; }
+  small { color: #888; }
+  #term {
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 14px;
+    line-height: 1.2;
+    background: var(--tui-bg);
+    color: var(--tui-fg);
+    padding: 0.5em;
+    border: 1px solid #444;
+    min-width: 80ch;
+    min-height: 24em;
+    outline: none;
+    cursor: text;
+    white-space: pre;
+  }
+  #term:focus { border-color: #88f; }
+  #term div { line-height: 1.2; min-height: 1em; }
+</style>
+
+<h1>oc web port — TUI bound to wasm, files proxied to the Go server</h1>
+<div id="term" tabindex="0" data-wasm="app.wasm"></div>
+<p>
+  <small>
+    Click the terminal to focus, then keys (incl. arrow keys, Ctrl-X, Meta-X)
+    are queued and drained by Oberon's <code>TUI.ReadKey</code>.
+    Files are served from the project base under <code>/api/files/…</code>.
+  </small>
+  <span id="status" style="margin-left:1em; color:#f88"></span>
+</p>
+
+<script type="module" src="dist/main.js"></script>

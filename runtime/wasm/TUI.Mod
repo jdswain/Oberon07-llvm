@@ -61,6 +61,22 @@ MODULE TUI;
     AttrNormal*  = 0;
     AttrReverse* = 1;
     AttrBold*    = 2;
+    AttrItalic*  = 4;
+
+    (* Foreground / background palette. Eight-colour scheme modelled
+       on the IBM 3270 / 5250 terminal families — limited but
+       distinguishable on monochrome and colour displays alike, and
+       maps cleanly to both ANSI 30..37 / 40..47 and CSS named
+       colours. ColorDefault resets to the terminal's own default. *)
+    ColorDefault*   = -1;
+    ColorBlack*     = 0;
+    ColorBlue*      = 1;
+    ColorRed*       = 2;
+    ColorPink*      = 3;
+    ColorGreen*     = 4;
+    ColorTurquoise* = 5;
+    ColorYellow*    = 6;
+    ColorWhite*     = 7;
 
   VAR
     (* Terminal dimensions in cells. Updated by Init and Resize. *)
@@ -102,6 +118,14 @@ MODULE TUI;
   PROCEDURE SetAttr*(attr: INTEGER);
   BEGIN
   END SetAttr;
+
+  PROCEDURE SetFg*(color: INTEGER);
+  BEGIN
+  END SetFg;
+
+  PROCEDURE SetBg*(color: INTEGER);
+  BEGIN
+  END SetBg;
 
   PROCEDURE Write*(ch: CHAR);
   BEGIN

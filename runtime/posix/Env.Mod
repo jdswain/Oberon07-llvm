@@ -22,4 +22,13 @@ MODULE Env;
   BEGIN
   END Cwd;
 
+  (* Project base path. On wasm this is derived from the URL the
+     browser loaded — the path component up to the project root —
+     and prepended to every relative Files API call by the JS shim.
+     On posix it's a no-op (returns ""); the host filesystem has no
+     equivalent concept. *)
+  PROCEDURE BasePath*(VAR s: ARRAY OF CHAR);
+  BEGIN
+  END BasePath;
+
 END Env.

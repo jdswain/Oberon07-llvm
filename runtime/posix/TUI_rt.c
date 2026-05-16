@@ -141,10 +141,30 @@ void TUI__ShowCursor(void) { out_str("\x1b[?25h"); }
 void TUI__HideCursor(void) { out_str("\x1b[?25l"); }
 
 void TUI__SetAttr(int attr) {
-    out_str("\x1b[0m");
-    if (attr & 1) out_str("\x1b[7m");
-    if (attr & 2) out_str("\x1b[1m");
+    out_str("\x1b[0m");                   /* reset all */
+    if (attr & 1) out_str("\x1b[7m");     /* reverse */
+    if (attr & 2) out_str("\x1b[1m");     /* bold */
+    if (attr & 4) out_str("\x1b[3m");     /* italic — honoured by most
+                                             modern terminals, ignored
+                                             cleanly by older ones */
 }
+
+/* Foreground / background colour. The palette is 8-entry to match
+ * TUI.Mod's ColorBlack..ColorWhite. Values are mapped to ANSI 30..37
+ * (fg) / 40..47 (bg). ColorDefault (-1) emits the "default" SGR (39 /
+ * 49). Anything else is clamped to range. */
+static void emit_color(int color, int base, int reset) {
+    char seq[16];
+    if (color < 0) { snprintf(seq, sizeof(seq), "\x1b[%dm", reset); }
+    else {
+        if (color > 7) color = 7;
+        snprintf(seq, sizeof(seq), "\x1b[%dm", base + color);
+    }
+    out_str(seq);
+}
+
+void TUI__SetFg(int color) { emit_color(color, 30, 39); }
+void TUI__SetBg(int color) { emit_color(color, 40, 49); }
 
 void TUI__Write(char ch) { out_emit(&ch, 1); }
 

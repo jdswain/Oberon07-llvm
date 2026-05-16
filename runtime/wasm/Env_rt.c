@@ -1,14 +1,21 @@
-/* Env_rt.c — strong implementation backing Env.Mod.
+/* runtime/wasm/Env_rt.c — Env backend for the browser host.
  *
- * Calls into the OC runtime's argv stash, which is populated by the
- * compiler-emitted entry stub before any module init runs. Cwd hits
- * libc directly. */
-
+ * argc / argv still flow through the runtime's argv stash (the
+ * synthesised main() calls oc_set_args before any module init).
+ * Cwd and BasePath defer to the JS shim — both are URL-derived,
+ * read from window.location.pathname on the host side. The JS
+ * writes the result into wasm memory at the pointer the wasm
+ * passes in. */
 #include <string.h>
-#include <unistd.h>
 
 extern int         oc_argc(void);
 extern const char *oc_argv(int i);
+
+#define ENV_IMPORT(name) \
+    __attribute__((import_module("env"), import_name(#name)))
+
+ENV_IMPORT(cwd)        extern void js_env_cwd      (char *out, int out_len);
+ENV_IMPORT(base_path)  extern void js_env_base_path(char *out, int out_len);
 
 int Env__ArgCount(void) {
     return oc_argc();
@@ -25,14 +32,16 @@ void Env__Arg(int i, char *out, int out_len) {
     out[n] = 0;
 }
 
-/* Process working directory at call time. Truncates without error
- * if the buffer is too small; returns "" on getcwd failure. */
 void Env__Cwd(char *out, int out_len) {
     if (out_len <= 0) return;
     out[0] = 0;
-    if (!getcwd(out, (size_t)out_len)) {
-        out[0] = 0;
-    }
+    js_env_cwd(out, out_len);
+}
+
+void Env__BasePath(char *out, int out_len) {
+    if (out_len <= 0) return;
+    out[0] = 0;
+    js_env_base_path(out, out_len);
 }
 
 void Env__init(void) {}

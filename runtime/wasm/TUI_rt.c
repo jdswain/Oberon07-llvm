@@ -45,6 +45,8 @@ TUI_IMPORT(move_to)      extern void js_move_to(int col, int row);
 TUI_IMPORT(show_cursor)  extern void js_show_cursor(void);
 TUI_IMPORT(hide_cursor)  extern void js_hide_cursor(void);
 TUI_IMPORT(set_attr)     extern void js_set_attr(int attr);
+TUI_IMPORT(set_fg)       extern void js_set_fg(int color);
+TUI_IMPORT(set_bg)       extern void js_set_bg(int color);
 TUI_IMPORT(write_char)   extern void js_write_char(int ch);
 TUI_IMPORT(write_str)    extern void js_write_str(const char *p, int n);
 TUI_IMPORT(flush)        extern void js_flush(void);
@@ -96,6 +98,14 @@ void TUI__HideCursor(void) {
 
 void TUI__SetAttr(int attr) {
     js_set_attr(attr);
+}
+
+void TUI__SetFg(int color) {
+    js_set_fg(color);
+}
+
+void TUI__SetBg(int color) {
+    js_set_bg(color);
 }
 
 void TUI__Write(char ch) {

@@ -35,4 +35,11 @@ void Env__Cwd(char *out, int out_len) {
     }
 }
 
+/* Project base path. POSIX has no notion of a URL-rooted project
+ * tree, so we return the empty string. The wasm runtime fills this
+ * in from window.location.pathname. */
+void Env__BasePath(char *out, int out_len) {
+    if (out_len > 0) out[0] = 0;
+}
+
 void Env__init(void) {}
