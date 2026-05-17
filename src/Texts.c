@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <sys/stat.h>
 
 // Global variables
 static Texts_Text log_text;
@@ -44,23 +45,37 @@ static void init_log(void) {
 
 // Text operations
 void Texts_Open(Texts_Text *T, char *name) {
-    FILE *f;
-    
-    T->data = (char*)malloc(MAX_TEXT_LEN);
-    T->maxlen = MAX_TEXT_LEN;
-    T->len = 0;
-    
-    if (!T->data) return;
-    
-    f = fopen(name, "r");
-    if (f) {
-        T->len = fread(T->data, 1, MAX_TEXT_LEN - 1, f);
-        T->data[T->len] = '\0';
-        fclose(f);
-    } else {
-        T->len = 0;
-        T->data[0] = '\0';
+    /* Size the buffer to the file. The original 64 KB cap silently
+     * truncated longer source files: fread short-counted, the scanner
+     * hit EOF mid-statement, and the parser quietly emitted an
+     * incomplete module — the bug whose surface was "1-char rename
+     * inside a procedure flips startup behaviour" because the rename
+     * shifted module-body bytes across the truncation point.
+     *
+     * Caps at MAX_TEXT_LEN_HARD to keep a single bad input from
+     * exhausting memory but the limit is many MB now, not 64 KB. */
+    FILE *f = fopen(name, "r");
+    if (!f) {
+        T->data   = (char*)malloc(1);
+        T->maxlen = 1;
+        T->len    = 0;
+        if (T->data) T->data[0] = '\0';
+        return;
     }
+    struct stat st;
+    LONGINT cap = 0;
+    if (fstat(fileno(f), &st) == 0 && st.st_size > 0) {
+        cap = (LONGINT)st.st_size + 1;     /* +1 for NUL */
+        if (cap > MAX_TEXT_LEN_HARD) cap = MAX_TEXT_LEN_HARD;
+    }
+    if (cap < MAX_TEXT_LEN) cap = MAX_TEXT_LEN;
+    T->data   = (char*)malloc((size_t)cap);
+    T->maxlen = cap;
+    T->len    = 0;
+    if (!T->data) { fclose(f); return; }
+    T->len    = fread(T->data, 1, (size_t)(cap - 1), f);
+    T->data[T->len] = '\0';
+    fclose(f);
 }
 
 void Texts_Close(Texts_Text *T) {

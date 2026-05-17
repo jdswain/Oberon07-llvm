@@ -25,7 +25,14 @@
 #include <stdio.h>
 
 // Constants
+// Initial / minimum source-file buffer (also used by the in-memory log
+// text). Real source files allocate exactly fstat()-size + 1; this is
+// the floor used when fstat fails or returns 0.
 #define MAX_TEXT_LEN 65536
+// Hard cap on a single source file. 16 MB is well above any reasonable
+// hand-written Oberon module and still safe against a malformed input
+// claiming a 4 GB size.
+#define MAX_TEXT_LEN_HARD (16 * 1024 * 1024)
 #define MAX_SCANNER_STRING 256
 
 // Text classes for scanner
