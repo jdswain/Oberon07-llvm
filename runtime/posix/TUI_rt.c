@@ -150,22 +150,38 @@ void TUI__SetAttr(int attr) {
     if (attr & 8) out_str("\x1b[4m");     /* underline */
 }
 
-/* Foreground / background colour. The palette is 8-entry to match
- * TUI.Mod's ColorBlack..ColorWhite. Values are mapped to ANSI 30..37
- * (fg) / 40..47 (bg). ColorDefault (-1) emits the "default" SGR (39 /
- * 49). Anything else is clamped to range. */
-static void emit_color(int color, int base, int reset) {
+/* Foreground / background colour. TUI.Mod's palette is in IBM 3270
+ * order (black, blue, red, pink, green, turquoise, yellow, white)
+ * which does not match ANSI's order (black, red, green, yellow,
+ * blue, magenta, cyan, white). Map through this table rather than
+ * adding the constant to ANSI base 30 — the latter was emitting
+ * red for ColorBlue, green for ColorRed, etc. ColorDefault (-1)
+ * emits the SGR for "terminal default" (39 fg / 49 bg). */
+static const int ansi_fg[8] = {
+    30,  /* 0 Black     */
+    34,  /* 1 Blue      */
+    31,  /* 2 Red       */
+    35,  /* 3 Pink      → ANSI magenta */
+    32,  /* 4 Green     */
+    36,  /* 5 Turquoise → ANSI cyan    */
+    33,  /* 6 Yellow    */
+    37,  /* 7 White     */
+};
+
+static void emit_color(int color, int is_bg) {
     char seq[16];
-    if (color < 0) { snprintf(seq, sizeof(seq), "\x1b[%dm", reset); }
-    else {
+    if (color < 0) {
+        snprintf(seq, sizeof(seq), "\x1b[%dm", is_bg ? 49 : 39);
+    } else {
         if (color > 7) color = 7;
-        snprintf(seq, sizeof(seq), "\x1b[%dm", base + color);
+        /* Background SGR is +10 from foreground (30..37 → 40..47). */
+        snprintf(seq, sizeof(seq), "\x1b[%dm", ansi_fg[color] + (is_bg ? 10 : 0));
     }
     out_str(seq);
 }
 
-void TUI__SetFg(int color) { emit_color(color, 30, 39); }
-void TUI__SetBg(int color) { emit_color(color, 40, 49); }
+void TUI__SetFg(int color) { emit_color(color, 0); }
+void TUI__SetBg(int color) { emit_color(color, 1); }
 
 void TUI__Write(char ch) { out_emit(&ch, 1); }
 

@@ -27,7 +27,7 @@
     font-display: swap;
   }
 
-  :root { --tui-bg: #000; --tui-fg: #eee; --tui-cursor: #ffd000; }
+  :root { --tui-bg: #000; --tui-fg: #00cc66; --tui-cursor: #00cc66; }
   body { font-family: system-ui, sans-serif; background: #1e1e1e; color: #ccc; margin: 1em; }
   h1 { font-weight: 400; font-size: 1em; color: #888; margin: 0 0 0.5em 0; }
   small { color: #888; }
@@ -46,7 +46,10 @@
     white-space: pre;
   }
   #term:focus { border-color: #88f; }
-  #term div { line-height: 1.1; min-height: 1em; }
+  /* Empty rows take the same height as content rows so the cursor
+     landing on an otherwise empty row doesn't push the rows below
+     down (matches line-height — no vertical reflow). */
+  #term div { line-height: 1.1; min-height: 1.1em; }
 </style>
 
 <h1>oc web port — TUI bound to wasm, files proxied to the Go server</h1>

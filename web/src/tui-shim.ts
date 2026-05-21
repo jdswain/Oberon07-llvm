@@ -80,16 +80,22 @@ export function makeTuiShim(host: HTMLElement): TuiShim {
   let cols = 80;
 
   function measureCell(): void {
-    // Cheap measurement: insert a single non-breaking-space cell,
-    // read its bounding box, then remove it.
-    const probe = document.createElement("span");
+    // Build a probe that matches the row structure (`<div><span>M</span></div>`)
+    // so cellH reflects the actual rendered row height — including any
+    // CSS height/line-height locking on `#term div`. Measuring a bare
+    // span misses that and can let cellH drift away from div height by
+    // a subpixel, which feeds back into recomputeDims.
+    const probeDiv = document.createElement("div");
+    const probe    = document.createElement("span");
     probe.textContent = "M";
-    probe.style.visibility = "hidden";
-    probe.style.position = "absolute";
-    host.appendChild(probe);
-    cellW = probe.offsetWidth  || cellW;
-    cellH = probe.offsetHeight || cellH;
-    probe.remove();
+    probeDiv.appendChild(probe);
+    probeDiv.style.visibility = "hidden";
+    probeDiv.style.position   = "absolute";
+    probeDiv.style.left       = "-9999px";
+    host.appendChild(probeDiv);
+    cellW = probe.offsetWidth     || cellW;
+    cellH = probeDiv.offsetHeight || cellH;
+    probeDiv.remove();
   }
 
   function recomputeDims(): void {
@@ -98,7 +104,17 @@ export function makeTuiShim(host: HTMLElement): TuiShim {
     rows = Math.max(1, Math.floor(host.clientHeight / cellH));
   }
 
+  // Clamp writes to the current viewport. No scrolling is implemented;
+  // anything past the bottom/right would otherwise grow `cells`
+  // unboundedly, which feeds back into `rows()` (the DOM gets taller
+  // → host.clientHeight grows → recomputed rows grows → caller writes
+  // more rows next frame → runaway). The TUI contract gives callers a
+  // fixed grid via rows()/cols(); clamping enforces that.
   function ensureCell(r: number, c: number): Cell {
+    if (r >= rows) r = rows - 1;
+    if (c >= cols) c = cols - 1;
+    if (r < 0) r = 0;
+    if (c < 0) c = 0;
     while (cells.length <= r) cells.push([]);
     const row = cells[r];
     while (row.length <= c) row.push({ ch: " ", attr: 0, fg: -1, bg: -1 });
@@ -127,8 +143,12 @@ export function makeTuiShim(host: HTMLElement): TuiShim {
 
   function render(): void {
     const frag = document.createDocumentFragment();
-    for (let r = 0; r < cells.length; r++) {
-      const row = cells[r];
+    // Iterate up to `rows`, not cells.length, so the DOM has exactly
+    // one div per viewport row — fixes the feedback loop where extra
+    // cells made the host taller, which made the next rows() call
+    // report more rows.
+    for (let r = 0; r < rows; r++) {
+      const row = cells[r] || [];
       const line = document.createElement("div");
       for (let c = 0; c < row.length; c++) line.appendChild(renderCell(row[c]));
       if (cursorVisible && r === curRow) {
@@ -191,11 +211,12 @@ export function makeTuiShim(host: HTMLElement): TuiShim {
       dirty = true;
     },
     clear_line(): void {
-      cells[curRow] = [];
+      if (curRow >= 0 && curRow < rows) cells[curRow] = [];
       dirty = true;
     },
     move_to(col: number, row: number): void {
-      curCol = col; curRow = row;
+      curCol = Math.max(0, Math.min(col, cols - 1));
+      curRow = Math.max(0, Math.min(row, rows - 1));
       dirty = true;
     },
     show_cursor(): void { cursorVisible = true;  dirty = true; },
