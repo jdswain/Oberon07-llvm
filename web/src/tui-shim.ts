@@ -121,15 +121,24 @@ export function makeTuiShim(host: HTMLElement): TuiShim {
     return row[c];
   }
 
-  function renderCell(c: Cell): HTMLSpanElement {
+  // Two cells share style iff every visual attribute matches. This
+  // is the grouping key for emitting runs as single spans (see
+  // renderRun below) — runs of like-styled cells get one span, which
+  // lets the browser lay out their characters as continuous
+  // monospace text rather than one inline-block per glyph (which
+  // accumulates sub-pixel drift on certain chars/fallback fonts).
+  function sameStyle(a: Cell, b: Cell): boolean {
+    return a.attr === b.attr && a.fg === b.fg && a.bg === b.bg;
+  }
+
+  function styleSpan(text: string, c: Cell): HTMLSpanElement {
     const sp = document.createElement("span");
-    sp.textContent = c.ch === " " ? " " : c.ch;
+    sp.textContent = text;
     const fg = colorCss(c.fg, "");
     const bg = colorCss(c.bg, "");
-    if (fg) sp.style.color = fg;
+    if (fg) sp.style.color           = fg;
     if (bg) sp.style.backgroundColor = bg;
     if (c.attr & ATTR_REVERSE) {
-      // Swap fg/bg if both set, else flip against the host's default.
       const fgOut = bg || "var(--tui-bg, #000)";
       const bgOut = fg || "var(--tui-fg, #eee)";
       sp.style.color           = fgOut;
@@ -141,31 +150,74 @@ export function makeTuiShim(host: HTMLElement): TuiShim {
     return sp;
   }
 
+  // Paint one logical row. Walks `cells[r]` building runs of cells
+  // that share a style and emitting each run as a single span. The
+  // cursor, when in this row, is forced to be its own one-char run
+  // with cursor colours overlayed.
+  function paintRow(r: number): HTMLDivElement {
+    const line = document.createElement("div");
+    const row = cells[r] || [];
+
+    // Padding: if the cursor lies past the row's content, fill the
+    // gap with default cells so the cursor has somewhere to land.
+    const isCursorRow = cursorVisible && r === curRow;
+    const need = isCursorRow ? Math.max(row.length, curCol + 1) : row.length;
+    const pad: Cell = { ch: " ", attr: 0, fg: -1, bg: -1 };
+
+    let runStart = 0;
+    while (runStart < need) {
+      const startCell = row[runStart] || pad;
+      // Cursor cell is its own one-character run regardless of style.
+      if (isCursorRow && runStart === curCol) {
+        const sp = styleSpan(startCell.ch || " ", startCell);
+        sp.style.backgroundColor = "var(--tui-cursor, #ffd000)";
+        sp.style.color           = "var(--tui-bg, #000)";
+        line.appendChild(sp);
+        runStart++;
+        continue;
+      }
+      let end = runStart + 1;
+      while (end < need) {
+        const c = row[end] || pad;
+        if (isCursorRow && end === curCol) break;
+        if (!sameStyle(c, startCell)) break;
+        end++;
+      }
+      let text = "";
+      for (let i = runStart; i < end; i++) text += (row[i] || pad).ch;
+      line.appendChild(styleSpan(text, startCell));
+      runStart = end;
+    }
+    return line;
+  }
+
   function render(): void {
     const frag = document.createDocumentFragment();
     // Iterate up to `rows`, not cells.length, so the DOM has exactly
     // one div per viewport row — fixes the feedback loop where extra
     // cells made the host taller, which made the next rows() call
     // report more rows.
-    for (let r = 0; r < rows; r++) {
-      const row = cells[r] || [];
-      const line = document.createElement("div");
-      for (let c = 0; c < row.length; c++) line.appendChild(renderCell(row[c]));
-      if (cursorVisible && r === curRow) {
-        // Render the cursor as an inverted-attr cell appended past
-        // the existing line content if needed.
-        while (line.childElementCount <= curCol) {
-          line.appendChild(renderCell({ ch: " ", attr: 0, fg: -1, bg: -1 }));
-        }
-        const cur = line.children[curCol] as HTMLElement;
-        cur.style.backgroundColor = "var(--tui-cursor, #ffd000)";
-        cur.style.color           = "var(--tui-bg, #000)";
-      }
-      frag.appendChild(line);
-    }
+    for (let r = 0; r < rows; r++) frag.appendChild(paintRow(r));
     host.replaceChildren(frag);
     dirty = false;
   }
+
+  // Window-resize → repaint. We can't push a "viewport changed"
+  // signal directly into the wasm program; the cheapest wakeup is
+  // to dispatch Ctrl-L (the editor's redraw key, a no-op for state
+  // but it forces a Refresh which in turn calls TUI.Resize). Debounce
+  // through requestAnimationFrame so a drag-resize doesn't fire
+  // hundreds of dispatches per second.
+  let resizeQueued = false;
+  function scheduleResize(): void {
+    if (resizeQueued) return;
+    resizeQueued = true;
+    requestAnimationFrame(() => {
+      resizeQueued = false;
+      dispatchKey(12);    // Ctrl-L
+    });
+  }
+  window.addEventListener("resize", scheduleResize);
 
   host.addEventListener("keydown", (e: KeyboardEvent) => {
     let code = 0;

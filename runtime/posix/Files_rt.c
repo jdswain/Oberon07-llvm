@@ -12,6 +12,7 @@
  * the "edit a few hundred KB of source files" workloads typical of
  * Oberon-style programs; not for video editing.
  */
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -405,6 +406,91 @@ void Files__WriteNum(Rider *R, int x) {
         x >>= 7;
     }
     put_byte(R, (uint8_t)(x & 0x7F));
+}
+
+/* Streaming directory iteration. We hold a small pool of open DIR
+ * handles; cookies are indices into the pool. Eight slots is plenty
+ * for an interactive editor — directory iteration is short-lived. */
+#define DIR_SLOTS 8
+
+typedef struct DirSlot {
+    DIR *dp;
+    char path[260];
+} DirSlot;
+
+static DirSlot dir_slots[DIR_SLOTS] = {{0}};
+
+int Files__OpenDir(const char *path, int path_len) {
+    char dir[260];
+    copy_name(path, path_len, dir, sizeof dir);
+    if (dir[0] == 0) { dir[0] = '.'; dir[1] = 0; }
+
+    /* Find a free slot. */
+    int slot = -1;
+    for (int i = 0; i < DIR_SLOTS; i++) {
+        if (dir_slots[i].dp == NULL) { slot = i; break; }
+    }
+    if (slot < 0) return -1;
+
+    DIR *dp = opendir(dir);
+    if (!dp) return -1;
+    dir_slots[slot].dp = dp;
+    snprintf(dir_slots[slot].path, sizeof dir_slots[slot].path, "%s", dir);
+    return slot;
+}
+
+int Files__NextEntry(int cookie,
+                     char *name, int name_len,
+                     int *out_isDir) {
+    if (cookie < 0 || cookie >= DIR_SLOTS || dir_slots[cookie].dp == NULL) {
+        return 0;
+    }
+    DIR *dp = dir_slots[cookie].dp;
+    struct dirent *de;
+    while ((de = readdir(dp)) != NULL) {
+        /* Skip "." and "..". */
+        if (de->d_name[0] == '.' &&
+            (de->d_name[1] == 0 ||
+             (de->d_name[1] == '.' && de->d_name[2] == 0))) {
+            continue;
+        }
+
+        /* Copy name into the caller's open-array CHAR. */
+        int i = 0;
+        while (de->d_name[i] != 0 && i + 1 < name_len) {
+            name[i] = de->d_name[i]; i++;
+        }
+        if (i < name_len) name[i] = 0;
+
+        /* Determine isDir via d_type, falling through to stat() for
+         * symlinks (so /tmp → /private/tmp is reported as a dir) and
+         * for filesystems that return DT_UNKNOWN. stat() follows
+         * links, unlike lstat. */
+        int is_dir = 0;
+#ifdef DT_DIR
+        if (de->d_type == DT_DIR) {
+            is_dir = 1;
+        } else if (de->d_type == DT_LNK || de->d_type == DT_UNKNOWN) {
+#endif
+            char full[520];
+            snprintf(full, sizeof full, "%s/%s",
+                     dir_slots[cookie].path, de->d_name);
+            struct stat st;
+            if (stat(full, &st) == 0 && S_ISDIR(st.st_mode)) is_dir = 1;
+#ifdef DT_DIR
+        }
+#endif
+        *out_isDir = is_dir;
+        return 1;
+    }
+    return 0;
+}
+
+void Files__CloseDir(int cookie) {
+    if (cookie >= 0 && cookie < DIR_SLOTS && dir_slots[cookie].dp != NULL) {
+        closedir(dir_slots[cookie].dp);
+        dir_slots[cookie].dp = NULL;
+    }
 }
 
 void Files__init(void) {}

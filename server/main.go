@@ -150,6 +150,10 @@ func (h *filesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
+		if r.URL.Query().Get("list") != "" {
+			h.list(w, r, abs)
+			return
+		}
 		h.read(w, r, abs)
 	case http.MethodPut:
 		h.write(w, r, abs)
@@ -171,6 +175,52 @@ func (h *filesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST requires ?rename or ?mkdir", http.StatusBadRequest)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// list emits the directory's entries as plain text, one per line:
+//   <name>\t<D|F>\n
+// "." and ".." are filtered. The wasm Files shim parses this on
+// open_dir and replays it through next_entry / close_dir.
+func (h *filesHandler) list(w http.ResponseWriter, r *http.Request, abs string) {
+	st, err := os.Stat(abs)
+	if errors.Is(err, os.ErrNotExist) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !st.IsDir() {
+		http.Error(w, "not a directory", http.StatusBadRequest)
+		return
+	}
+	entries, err := os.ReadDir(abs)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	for _, e := range entries {
+		name := e.Name()
+		if name == "." || name == ".." {
+			continue
+		}
+		// e.IsDir() uses lstat → symlinks to dirs (e.g. /tmp on macOS)
+		// would be reported as files. Fall through to stat() so the
+		// link target's type wins.
+		isDir := e.IsDir()
+		if !isDir && (e.Type()&os.ModeSymlink) != 0 {
+			if st, err := os.Stat(filepath.Join(abs, name)); err == nil {
+				isDir = st.IsDir()
+			}
+		}
+		flag := "F"
+		if isDir {
+			flag = "D"
+		}
+		_, _ = w.Write([]byte(name + "\t" + flag + "\n"))
 	}
 }
 

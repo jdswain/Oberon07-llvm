@@ -72,6 +72,24 @@ MODULE Files;
   BEGIN
   END MakeDir;
 
+  (* Streaming directory iteration. On wasm this round-trips through
+     /api/files/<path>?list=1; the JS shim parses the response on
+     OpenDir and replays it via NextEntry. Returns / VAR convention
+     match posix — see Files.Mod there. *)
+  PROCEDURE OpenDir*(path: ARRAY OF CHAR): INTEGER;
+  BEGIN RETURN -1
+  END OpenDir;
+
+  PROCEDURE NextEntry*(cookie: INTEGER;
+                       VAR name: ARRAY OF CHAR;
+                       VAR isDir: INTEGER): INTEGER;
+  BEGIN RETURN 0
+  END NextEntry;
+
+  PROCEDURE CloseDir*(cookie: INTEGER);
+  BEGIN
+  END CloseDir;
+
   PROCEDURE Length*(f: File): INTEGER;
   BEGIN RETURN 0
   END Length;

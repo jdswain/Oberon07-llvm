@@ -97,6 +97,24 @@ extern int js_files_exists(const char *name, int name_len);
 FILES_IMPORT(mkdir)
 extern int js_files_mkdir(const char *name, int name_len);
 
+/* js_opendir(name, name_len) — sync GET /api/files/<name>?list=1.
+ *   Returns >= 0 cookie on success, -1 on error. The JS shim caches
+ *   the listing per-cookie until close_dir() is called. */
+FILES_IMPORT(open_dir)
+extern int js_files_open_dir(const char *name, int name_len);
+
+/* js_next_entry(cookie, name_buf, name_buf_len, isDir_out) — pulls
+ *   the next entry from the cached listing. Returns 1 if filled,
+ *   0 once exhausted. */
+FILES_IMPORT(next_entry)
+extern int js_files_next_entry(int cookie,
+                               char *name, int name_len,
+                               int *isDir);
+
+/* js_close_dir(cookie) — drop the cached listing. */
+FILES_IMPORT(close_dir)
+extern void js_files_close_dir(int cookie);
+
 /* ---- wasm-side allocator exposed to JS -------------------------- */
 
 /* JS calls back into this from files_read to obtain a buffer for
@@ -371,6 +389,20 @@ void Files__WriteNum(Rider *R, int x) {
         x >>= 7;
     }
     put_byte(R, (uint8_t)(x & 0x7F));
+}
+
+int Files__OpenDir(const char *name, int name_len) {
+    return js_files_open_dir(name, name_len);
+}
+
+int Files__NextEntry(int cookie,
+                     char *name, int name_len,
+                     int *out_isDir) {
+    return js_files_next_entry(cookie, name, name_len, out_isDir);
+}
+
+void Files__CloseDir(int cookie) {
+    js_files_close_dir(cookie);
 }
 
 void Files__init(void) {}

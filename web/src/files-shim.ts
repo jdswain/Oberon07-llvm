@@ -6,7 +6,10 @@
 // JS thread only blocks on Old (load) and Register/Close (save) —
 // never on per-byte reads/writes.
 
-import { readStr, writeI32, writeBytes, readBytes, wasmAlloc } from "./wasm-mem.js";
+import { readStr, writeStr, writeI32, writeBytes, readBytes, wasmAlloc } from "./wasm-mem.js";
+
+interface DirEntry { name: string; isDir: boolean; }
+interface DirSlot  { entries: DirEntry[]; next: number; }
 
 export interface FilesShimConfig {
   /** Root path under which the server serves the file API.
@@ -33,6 +36,9 @@ function joinPath(...parts: string[]): string {
 }
 
 export function makeFilesShim(cfg: FilesShimConfig): FilesShim {
+  const dirSlots = new Map<number, DirSlot>();
+  let dirSeq = 0;
+
   function urlFor(name: string): string {
     const path = joinPath(cfg.apiRoot, cfg.projectBase, name);
     return "/" + path;
@@ -43,7 +49,14 @@ export function makeFilesShim(cfg: FilesShimConfig): FilesShim {
   ): { status: number; body: ArrayBuffer; lastModified: number } {
     const xhr = new XMLHttpRequest();
     xhr.open(method, url, false /* sync */);
-    xhr.responseType = "arraybuffer";
+    // Setting responseType is forbidden on synchronous XHR in the
+    // window context — browsers throw InvalidAccessError. Fall back
+    // to the classic binary-string trick: ask for text with a MIME
+    // override so each byte arrives as a single char-code 0..255 in
+    // responseText, then unpack into an ArrayBuffer.
+    if (method === "GET") {
+      xhr.overrideMimeType("text/plain; charset=x-user-defined");
+    }
     try {
       // XHR's send() signature is narrower than fetch's BodyInit;
       // cast the few payload kinds we use through.
@@ -54,9 +67,18 @@ export function makeFilesShim(cfg: FilesShimConfig): FilesShim {
     }
     const lm = xhr.getResponseHeader("Last-Modified");
     const lastModified = lm ? Math.floor(new Date(lm).getTime() / 1000) : 0;
+    let buf: ArrayBuffer = new ArrayBuffer(0);
+    if (method === "GET" && xhr.responseText) {
+      const text = xhr.responseText;
+      buf = new ArrayBuffer(text.length);
+      const view = new Uint8Array(buf);
+      for (let i = 0; i < text.length; i++) {
+        view[i] = text.charCodeAt(i) & 0xff;
+      }
+    }
     return {
       status: xhr.status,
-      body: (xhr.response as ArrayBuffer) ?? new ArrayBuffer(0),
+      body: buf,
       lastModified,
     };
   }
@@ -127,6 +149,44 @@ export function makeFilesShim(cfg: FilesShimConfig): FilesShim {
       const url = urlFor(name) + "?mkdir=1";
       const r = syncRequest("POST", url);
       return (r.status >= 200 && r.status < 300) ? 0 : 1;
+    },
+
+    // open_dir(name, len) -> cookie >= 0 or -1 on error.
+    //   Cached listing format from the server:
+    //     name\tD\n   (sub-directory)
+    //     name\tF\n   (file)
+    open_dir(namePtr: number, nameLen: number): number {
+      const name = readStr(namePtr, nameLen);
+      const r = syncRequest("GET", urlFor(name) + "?list=1");
+      if (r.status < 200 || r.status >= 300) return -1;
+      const text = new TextDecoder().decode(new Uint8Array(r.body));
+      const entries: DirEntry[] = [];
+      for (const line of text.split("\n")) {
+        if (line.length === 0) continue;
+        const tab = line.indexOf("\t");
+        const entryName = tab >= 0 ? line.substring(0, tab) : line;
+        const flag      = tab >= 0 ? line.substring(tab + 1) : "F";
+        entries.push({ name: entryName, isDir: flag === "D" });
+      }
+      const cookie = dirSeq++;
+      dirSlots.set(cookie, { entries, next: 0 });
+      return cookie;
+    },
+
+    // next_entry(cookie, name_buf, name_buf_len, isDir_ptr) -> 0/1
+    next_entry(cookie: number, namePtr: number, nameLen: number,
+               isDirPtr: number): number {
+      const slot = dirSlots.get(cookie);
+      if (!slot || slot.next >= slot.entries.length) return 0;
+      const e = slot.entries[slot.next++];
+      writeStr(namePtr, nameLen, e.name);
+      writeI32(isDirPtr, e.isDir ? 1 : 0);
+      return 1;
+    },
+
+    // close_dir(cookie)
+    close_dir(cookie: number): void {
+      dirSlots.delete(cookie);
     },
   };
 

@@ -72,6 +72,35 @@ MODULE Files;
   BEGIN
   END MakeDir;
 
+  (* Streaming directory iteration. Idiom:
+
+       cookie := Files.OpenDir(path);
+       IF cookie >= 0 THEN
+         WHILE Files.NextEntry(cookie, name, isDir) = 1 DO ... END;
+         Files.CloseDir(cookie)
+       END
+
+     OpenDir returns -1 if the path can't be opened. NextEntry returns
+     1 when name + isDir are filled, 0 once entries are exhausted;
+     "." and ".." are skipped. isDir gets 1 for sub-directories, 0
+     otherwise. Empty `path` is treated as "." (cwd) on posix.
+
+     INTEGER (rather than BOOLEAN) is used across the C boundary so
+     the LLVM ABI doesn't need to agree on i1 widening rules. *)
+  PROCEDURE OpenDir*(path: ARRAY OF CHAR): INTEGER;
+  BEGIN RETURN -1
+  END OpenDir;
+
+  PROCEDURE NextEntry*(cookie: INTEGER;
+                       VAR name: ARRAY OF CHAR;
+                       VAR isDir: INTEGER): INTEGER;
+  BEGIN RETURN 0
+  END NextEntry;
+
+  PROCEDURE CloseDir*(cookie: INTEGER);
+  BEGIN
+  END CloseDir;
+
   PROCEDURE Length*(f: File): INTEGER;
   BEGIN RETURN 0
   END Length;
