@@ -2121,13 +2121,25 @@ static char RuntimeDir[1024] = "";
  * wasm32 → runtime/wasm/, everything else → runtime/posix/. Both live
  * next to or one level above the compiler binary so the same lookup
  * works from `bin/oc` (../runtime) or a flat install (./runtime). */
+/* Map a target triple to a runtime flavour subdirectory under runtime/.
+ * `-ios` matches both arm64-apple-ios and arm64-apple-ios-simulator (and
+ * the versioned forms like arm64-apple-ios15.0); device and simulator
+ * share runtime sources because the only differences are linker config
+ * and the SDK, both handled outside the compiler. */
+static const char *runtime_flavor(const char *target) {
+    if (!target)                       return "posix";
+    if (strstr(target, "wasm"))        return "wasm";
+    if (strstr(target, "-ios"))        return "ios";
+    return "posix";
+}
+
 static void resolve_runtime_dir(const char *self_argv0, const char *target) {
     char self_abs[1024];
     if (realpath(self_argv0, self_abs) == NULL) return;
     char *last_slash = strrchr(self_abs, '/');
     if (!last_slash) return;
     *last_slash = 0;
-    const char *flavor = (target && strstr(target, "wasm")) ? "wasm" : "posix";
+    const char *flavor = runtime_flavor(target);
     /* Layouts to probe, in order. */
     char tryp[1024];
     const char *layouts[] = {
@@ -2160,7 +2172,7 @@ static int find_runtime_file(const char *self_argv0, const char *basename,
     char *last_slash = strrchr(self_abs, '/');
     if (!last_slash) return -1;
     *last_slash = 0;
-    const char *flavor = (target && strstr(target, "wasm")) ? "wasm" : "posix";
+    const char *flavor = runtime_flavor(target);
     char tryp[1024];
     const char *layouts[] = {
         "/../runtime/%s/", "/runtime/%s/",

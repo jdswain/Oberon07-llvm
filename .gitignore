@@ -17,6 +17,11 @@ web/dist/
 web/node_modules/
 web/app.wasm
 
+# iOS SPM build artifacts
+ios/.build/
+ios/.swiftpm/
+ios/Package.resolved
+
 # Go server binary + local FileStore
 server/server
 server/store/
