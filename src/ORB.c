@@ -775,8 +775,24 @@ void Export(const char *modid, BOOLEAN *newSF, int32_t *key) {
             ORS_Mark("new symbol file inhibited");
         }
     } else {
+        // Interface fingerprint unchanged — keep the existing key
+        // so importers stay valid. We still need to patch the file's
+        // key field: the rewrite above stamped a placeholder 0 there,
+        // and leaving it would flip the on-disk hash every other
+        // recompile (next run would read oldkey=0, see sum != 0,
+        // patch with sum; the run after would read oldkey=sum, see
+        // sum == sum, leave 0, and so on). Same patch as the
+        // success branch above.
         *newSF = false;
         *key = sum;
+        Files_Close(F);
+        F = Files_Update(filename);
+        if (F) {
+            Files_Set(&R, F, 4);
+            Files_WriteInt(&R, sum);
+            Files_Register(F);
+            Files_Close(F);
+        }
     }
 }
 
