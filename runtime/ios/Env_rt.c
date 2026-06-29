@@ -10,6 +10,7 @@
 
 extern void ios_env_cwd       (char *out, int out_len);
 extern void ios_env_base_path (char *out, int out_len);
+extern void ios_env_open_url  (const char *url, int n);
 
 int Env__ArgCount(void) {
     return 0;
@@ -30,6 +31,12 @@ void Env__BasePath(char *out, int out_len) {
     if (out_len <= 0) return;
     out[0] = 0;
     ios_env_base_path(out, out_len);
+}
+
+/* Open a URL via UIApplication.shared.open on the Swift side. */
+void Env__OpenURL(const char *url, int n) {
+    if (!url || n <= 0) return;
+    ios_env_open_url(url, n);
 }
 
 void Env__init(void) {}

@@ -4,6 +4,8 @@
  * compiler-emitted entry stub before any module init runs. Cwd hits
  * libc directly. */
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -40,6 +42,35 @@ void Env__Cwd(char *out, int out_len) {
  * in from window.location.pathname. */
 void Env__BasePath(char *out, int out_len) {
     if (out_len > 0) out[0] = 0;
+}
+
+/* Open a URL via the host's default handler. Shells out to `open`
+ * on macOS, `xdg-open` on Linux. The URL crosses as (ptr, len) per
+ * the Oberon open-array ABI and isn't NUL-terminated, so we copy
+ * into a fixed buffer before exec.
+ *
+ * Single-quoting the URL guards against shell metacharacters in
+ * the URL itself; embedded single quotes still need escaping (we
+ * just truncate at the first one — caller-supplied URLs are
+ * trusted-ish, and we never write past the buffer). */
+void Env__OpenURL(const char *url, int n) {
+    if (!url || n <= 0) return;
+    char buf[1024];
+    if (n > (int)sizeof(buf) - 1) n = (int)sizeof(buf) - 1;
+    memcpy(buf, url, (size_t)n);
+    buf[n] = 0;
+    /* Truncate at NUL or first single quote — see comment above. */
+    for (int i = 0; i < n; i++) {
+        if (buf[i] == 0 || buf[i] == '\'') { buf[i] = 0; break; }
+    }
+    char cmd[1100];
+#if defined(__APPLE__)
+    snprintf(cmd, sizeof(cmd), "open '%s' >/dev/null 2>&1 &", buf);
+#else
+    snprintf(cmd, sizeof(cmd), "xdg-open '%s' >/dev/null 2>&1 &", buf);
+#endif
+    int rc = system(cmd);
+    (void)rc;
 }
 
 void Env__init(void) {}

@@ -16,7 +16,7 @@ import PackageDescription
 
 let package = Package(
     name: "OberonTUI",
-    platforms: [.iOS(.v15)],
+    platforms: [.iOS(.v17)],  // .onKeyPress requires iOS 17+
     products: [
         .library(name: "OberonTUI",     targets: ["OberonTUI"]),
         .library(name: "OberonRuntime", targets: ["OberonRuntime"]),

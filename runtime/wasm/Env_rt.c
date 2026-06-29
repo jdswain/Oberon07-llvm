@@ -16,6 +16,7 @@ extern const char *oc_argv(int i);
 
 ENV_IMPORT(cwd)        extern void js_env_cwd      (char *out, int out_len);
 ENV_IMPORT(base_path)  extern void js_env_base_path(char *out, int out_len);
+ENV_IMPORT(open_url)   extern void js_env_open_url (const char *url, int n);
 
 int Env__ArgCount(void) {
     return oc_argc();
@@ -42,6 +43,13 @@ void Env__BasePath(char *out, int out_len) {
     if (out_len <= 0) return;
     out[0] = 0;
     js_env_base_path(out, out_len);
+}
+
+/* Open a URL via window.open on the JS side. The shim should
+ * resolve relative URLs against the host page if needed. */
+void Env__OpenURL(const char *url, int n) {
+    if (!url || n <= 0) return;
+    js_env_open_url(url, n);
 }
 
 void Env__init(void) {}

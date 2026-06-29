@@ -31,4 +31,13 @@ MODULE Env;
   BEGIN
   END BasePath;
 
+  (* Hand a URL (or any opaque "open this with the system default
+     handler" string) off to the host. On posix this shells out to
+     `open` / `xdg-open`; on wasm it calls window.open; on iOS it
+     calls UIApplication.open. Used by editors / link followers
+     for URLs the program itself can't handle (http/https etc.). *)
+  PROCEDURE OpenURL*(url: ARRAY OF CHAR);
+  BEGIN
+  END OpenURL;
+
 END Env.

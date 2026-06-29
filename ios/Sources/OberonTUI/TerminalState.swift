@@ -73,11 +73,34 @@ public final class TerminalState: ObservableObject {
         curAttr = []; curFg = -1; curBg = -1
     }
 
+    /// Resize the grid in-place. Existing cells survive where they
+    /// still fit; new rows / columns blank-fill. Critical for the
+    /// startup race: SwiftUI's GeometryReader fires resize once or
+    /// twice during initial layout, and we don't want to wipe out
+    /// whatever the Oberon side may have already painted.
     public func resize(rows: Int, cols: Int) {
-        guard rows != self.rows || cols != self.cols else { return }
-        self.rows = max(1, rows)
-        self.cols = max(1, cols)
-        pending   = Self.makeGrid(rows: self.rows, cols: self.cols)
+        let newRows = max(1, rows)
+        let newCols = max(1, cols)
+        guard newRows != self.rows || newCols != self.cols else { return }
+
+        if newRows > pending.count {
+            let extra = Array(repeating: Array(repeating: Cell.blank, count: newCols),
+                              count: newRows - pending.count)
+            pending.append(contentsOf: extra)
+        } else if newRows < pending.count {
+            pending = Array(pending.prefix(newRows))
+        }
+        for r in 0..<pending.count {
+            if pending[r].count < newCols {
+                pending[r].append(contentsOf:
+                    Array(repeating: Cell.blank, count: newCols - pending[r].count))
+            } else if pending[r].count > newCols {
+                pending[r] = Array(pending[r].prefix(newCols))
+            }
+        }
+
+        self.rows = newRows
+        self.cols = newCols
         displayed = pending
         if curRow >= self.rows { curRow = self.rows - 1 }
         if curCol >= self.cols { curCol = self.cols - 1 }
