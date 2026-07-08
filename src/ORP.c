@@ -2130,6 +2130,7 @@ static const char *runtime_flavor(const char *target) {
     if (!target)                       return "posix";
     if (strstr(target, "wasm"))        return "wasm";
     if (strstr(target, "-ios"))        return "ios";
+    if (strstr(target, "-android"))    return "android";
     return "posix";
 }
 
