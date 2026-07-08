@@ -22,6 +22,12 @@ ios/.build/
 ios/.swiftpm/
 ios/Package.resolved
 
+# Android — Gradle / build outputs
+android/.gradle/
+android/build/
+android/**/build/
+android/**/.cxx/
+
 # Go server binary + local FileStore
 server/server
 server/store/
