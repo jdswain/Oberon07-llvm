@@ -5,7 +5,8 @@ MODULE TestHost;
          Arrs, Recs, RecCopy, Strings, StrPass, Open,
          StackRec, ArrPtrs, Arc, ArcCons, Weak, Tree,
          App, Util, Diamond, A, B, Counter, Mix, Math,
-         Repeat, While, For;
+         Repeat, While, For,
+         Methods, MethBase, MethExt;
 
   VAR totalPassed, totalFailed: INTEGER;
 
@@ -60,6 +61,7 @@ BEGIN
   RunPlugin("MathTests");
   RunPlugin("FilesTests");
   RunPlugin("EnvTests");
+  RunPlugin("MethodsTests");
 
   Out.WriteString("======================="); Out.Ln();
   Out.WriteString("TOTAL: ");

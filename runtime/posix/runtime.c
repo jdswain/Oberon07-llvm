@@ -4,8 +4,10 @@
  *   { ptr tag, i64 refcount, ...source-ordered fields }
  *
  * Type-descriptor layout (compiler-emitted):
- *   { i64 size, i32 ext_level, i32 _pad, [8 x ptr] ancestors,
- *     i32 ptr_offsets[]; -1 terminated }
+ *   { i64 size, i32 ext_level, i32 nofmeth, [8 x ptr] ancestors,
+ *     ptr vtable[nofmeth], i32 ptr_offsets[]; -1 terminated }
+ * nofmeth counts the type-bound-procedure slots (vtable) that sit between
+ * the ancestors block and ptr_offsets; 0 for records without methods.
  *
  * The compiler emits oc_retain on every pointer-store of an in-scope value,
  * oc_release on the displaced value, and oc_release on every local pointer
@@ -24,9 +26,10 @@
 /* TD field offsets. Must match Ty_TDPrefix in src/ORG.c. */
 #define TD_SIZE_OFFSET     0
 #define TD_EXT_OFFSET      8
-#define TD_ANCESTORS_OFF  16   /* 16 = 8(size) + 4(ext) + 4(pad) */
+#define TD_NOFMETH_OFFSET 12
+#define TD_ANCESTORS_OFF  16   /* 16 = 8(size) + 4(ext) + 4(nofmeth) */
 #define TD_LEVELS         8
-#define TD_PTRS_OFFSET    (TD_ANCESTORS_OFF + TD_LEVELS * sizeof(void *))
+#define TD_VTBL_OFFSET    (TD_ANCESTORS_OFF + TD_LEVELS * sizeof(void *))
 
 static inline int64_t *oc_rc_slot(void *p) {
     return (int64_t *)((char *)p + OC_RC_OFFSET);
@@ -38,7 +41,9 @@ static inline int64_t oc_td_size(void *td) {
     return *(int64_t *)((char *)td + TD_SIZE_OFFSET);
 }
 static inline const int32_t *oc_td_ptr_offsets(void *td) {
-    return (const int32_t *)((char *)td + TD_PTRS_OFFSET);
+    int32_t nm = *(const int32_t *)((char *)td + TD_NOFMETH_OFFSET);
+    return (const int32_t *)((char *)td + TD_VTBL_OFFSET
+                             + (size_t)nm * sizeof(void *));
 }
 
 /* For diagnostics / leak-checking in tests. */

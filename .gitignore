@@ -35,6 +35,7 @@ server/store/
 
 # Test executables (built from TestHost.Mod by oc -o testhost)
 tests/testhost
+tests/test_host
 tests/oc_files_test.dat
 
 # Legacy per-test executables built before the framework consolidated them
