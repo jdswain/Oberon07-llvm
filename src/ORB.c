@@ -131,13 +131,16 @@ ObjectPtr thisfield(TypePtr rec) {
 /* Find the type-bound procedure named ORS_id, searching the record's own
    method list first and then its base chain — so an override shadows the
    method it replaces. Methods of imported types are visible only when
-   exported; a record's own module sees everything (mno <= 0). */
+   exported; a record's own module sees everything (mno <= 0).
+   Initialisers are skipped: they are reachable only through allocation
+   (type-qualified call), never on an instance (DDR-003). */
 ObjectPtr thismethod(TypePtr rec) {
     TypePtr t = rec;
     while (t != NULL) {
         ObjectPtr m = t->meth;
         while (m != NULL) {
-            if ((strcmp(m->name, ORS_id) == 0) && (m->expo || t->mno <= 0)) {
+            if (!m->initf && (strcmp(m->name, ORS_id) == 0) &&
+                (m->expo || t->mno <= 0)) {
                 return m;
             }
             m = m->next;
@@ -145,6 +148,52 @@ ObjectPtr thismethod(TypePtr rec) {
         t = t->base;
     }
     return NULL;
+}
+
+/* Find the initialiser named ORS_id for a constructor call T.Name(...).
+   DDR-003 inheritance rule: an extension inherits the base type's
+   initialisers unless it declares its own — so the search stops at the
+   NEAREST level that declares any initialiser (exported or not: a private
+   initialiser still claims responsibility for construction), and the name
+   is resolved among that level's visible ones only. */
+ObjectPtr thisinit(TypePtr rec) {
+    TypePtr t = rec;
+    while (t != NULL) {
+        ObjectPtr m = t->meth;
+        ObjectPtr found = NULL;
+        BOOLEAN declares = FALSE;
+        while (m != NULL) {
+            if (m->initf) {
+                declares = TRUE;
+                if ((strcmp(m->name, ORS_id) == 0) && (m->expo || t->mno <= 0)) {
+                    found = m;
+                }
+            }
+            m = m->next;
+        }
+        if (declares) {
+            return found;
+        }
+        t = t->base;
+    }
+    return NULL;
+}
+
+/* True when the record (or an ancestor) declares an initialiser — in
+   which case NEW is forbidden on pointers to it: allocation must go
+   through a constructor so no uninitialised object escapes (DDR-003). */
+BOOLEAN ORB_HasInits(TypePtr rec) {
+    while (rec != NULL) {
+        ObjectPtr m = rec->meth;
+        while (m != NULL) {
+            if (m->initf) {
+                return true;
+            }
+            m = m->next;
+        }
+        rec = rec->base;
+    }
+    return false;
 }
 
 /* Total vtable slot count including inherited methods. nofmeth is only
@@ -413,7 +462,9 @@ static void InType(Files_Rider *R, ObjectPtr thismod, TypePtr *T) {
                     Files_ReadString(R, mth->name);
                     Read(R, &k);
                     mth->expo = (k == 1);
-                    Files_ReadNum(R, &mth->val);   /* vtable slot */
+                    Read(R, &k);
+                    mth->initf = (k == 1);
+                    Files_ReadNum(R, &mth->val);   /* vtable slot (-1 for inits) */
                     Files_ReadString(R, mn);
                     mth->mname = strdup(mn);
                     InType(R, thismod, &mth->type);
@@ -715,6 +766,7 @@ static void OutType(Files_Rider *R, TypePtr t) {
                 Write(R, ORB_Meth);
                 Files_WriteString(R, fld->name);
                 Write(R, fld->expo ? 1 : 0);
+                Write(R, fld->initf ? 1 : 0);
                 Files_WriteNum(R, fld->val);
                 Files_WriteString(R, fld->mname ? fld->mname : "");
                 OutType(R, fld->type);

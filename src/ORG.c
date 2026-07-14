@@ -904,6 +904,32 @@ void ORG_MethodItem(ORG_Item *x, ORB_Object *m, BOOLEAN direct) {
     x->rdo = FALSE;
 }
 
+// Constructor call T.Name(...) (DDR-003/004). Allocation and
+// initialisation are one expression: allocate a fresh instance of `rec`
+// (oc_alloc zero-fills, stamps the tag, leaves refcount 0), then make x a
+// direct-callable item on the init body — statically bound per DDR-005 —
+// with the instance stashed as the hidden receiver (ORG_PrepCall pushes
+// it). The init body returns the instance at +1 (ORG_Return's pointer
+// convention), which the caller consumes by store or parameter pass.
+void ORG_InitItem(ORG_Item *x, ORB_Object *m, ORB_Type *rec) {
+    LLVMTypeRef alloc_pt[1] = { Ty_ptr };
+    LLVMTypeRef alloc_ft = LLVMFunctionType(Ty_ptr, alloc_pt, 1, 0);
+    LLVMValueRef alloc_fn = LLVMGetNamedFunction(Mod, "oc_alloc");
+    if (!alloc_fn) alloc_fn = LLVMAddFunction(Mod, "oc_alloc", alloc_ft);
+    LLVMValueRef td = record_td(rec);
+    LLVMValueRef args[1] = { td };
+    LLVMValueRef raw = LLVMBuildCall2(Bld, alloc_ft, alloc_fn, args, 1, "new");
+
+    x->mode = ORB_Const;              // direct call, like a named procedure
+    x->type = m->type;
+    x->backend = LookupProc(m);
+    x->backend2 = raw;                // hidden receiver = the fresh instance
+    x->a = 0;
+    x->b = 0;
+    x->r = 0;
+    x->rdo = FALSE;
+}
+
 // --- Type metadata / type tests ---
 void ORG_BuildTD(ORB_Type *T, LONGINT *dc) { (void)T; (void)dc; }
 void ORG_TypeTest(ORG_Item *x, ORB_Type *T, BOOLEAN varpar, BOOLEAN isguard) {

@@ -29,7 +29,7 @@
 #include "Files.h"
 
 /* Constants */
-#define versionkey 2   /* v2: type-bound procedures in record types (DDR-001/002) */
+#define versionkey 3   /* v3: initialiser flag on type-bound procedures (DDR-003/004) */
 #define maxTypTab 64
 
 /* Class values */
@@ -75,7 +75,10 @@ typedef struct ORB_Object {
     ObjectPtr dsc;
     TypePtr type;
     Ident name;
-    LONGINT val;           /* for ORB_Meth: vtable slot index */
+    LONGINT val;           /* for ORB_Meth: vtable slot index (-1 for initialisers) */
+    BOOLEAN initf;         /* ORB_Meth: initialiser (DDR-003) — allocates at the
+                              call site, statically bound, no vtable slot, not
+                              callable on an instance */
     char *mname;           /* ORB_Meth only: mangled symbol Mod__RcvType__Name.
                               Carried in the .smb so importing modules can
                               reference inherited method implementations in
@@ -138,6 +141,8 @@ ObjectPtr thisObj(void);
 ObjectPtr thisimport(ObjectPtr mod);
 ObjectPtr thisfield(TypePtr rec);
 ObjectPtr thismethod(TypePtr rec);   /* ORS_id lookup along the base chain */
+ObjectPtr thisinit(TypePtr rec);     /* ORS_id initialiser lookup (DDR-003 rule) */
+BOOLEAN ORB_HasInits(TypePtr rec);   /* any initialiser on the chain (NEW policy) */
 int ORB_TotalMeths(TypePtr rec);     /* total vtable slots incl. inherited */
 void OpenScope(void);
 void CloseScope(void);

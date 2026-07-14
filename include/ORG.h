@@ -60,6 +60,10 @@ void ORG_DeRef(ORG_Item *x);
 // Turn designator `x.m` into a callable item (type-bound call, DDR-001).
 // direct = static binding; otherwise dispatch through the receiver's tag.
 void ORG_MethodItem(ORG_Item *x, ORB_Object *m, BOOLEAN direct);
+// Constructor call T.Name(...) (DDR-003/004): allocate a fresh `rec`
+// instance and make x a callable item on the init body with the instance
+// as hidden receiver; the init body returns it at +1.
+void ORG_InitItem(ORG_Item *x, ORB_Object *m, ORB_Type *rec);
 
 // Type operations
 void ORG_BuildTD(ORB_Type *T, LONGINT *dc);

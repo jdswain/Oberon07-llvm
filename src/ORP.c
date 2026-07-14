@@ -200,10 +200,58 @@ static void TypeTest(ORG_Item *x, ORB_Type *T, BOOLEAN guard) {
     }
 }
 
+static void ParamList(ORG_Item *x);   /* fwd: constructor calls in selector */
+
+/* T.Name(args) — named constructor call (DDR-004/005). Allocates a fresh
+   instance of the qualifier's record type, binds the initialiser's
+   receiver to it, calls the init body statically (type-qualification
+   forces static binding), and yields the instance typed as the QUALIFIER
+   (D7.6) — so an inherited initialiser still constructs the derived type.
+   On entry x is the type designator (mode ORB_Typ) and ORS_id holds the
+   member name, not yet consumed. */
+static void ConstructorCall(ORG_Item *x) {
+    ORB_Type *ptrtyp = x->type;
+    ORB_Object *ini;
+    LONGINT rx;
+
+    if ((ptrtyp == NULL) || (ptrtyp->form != ORB_Pointer) ||
+        (ptrtyp->base == NULL) || (ptrtyp->base->form != ORB_Record)) {
+        ORS_Mark("only pointer-to-record types can be qualified");
+        ORS_Get(&sym);
+        return;
+    }
+    ini = thisinit(ptrtyp->base);
+    if (ini == NULL) {
+        if (thismethod(ptrtyp->base) != NULL) {
+            /* DDR-005 reserves the receiverless type-qualified form for
+               construction; the receiver case is SUPER */
+            ORS_Mark("methods cannot be type-qualified");
+        } else {
+            ORS_Mark("no such initialiser");
+        }
+        ORS_Get(&sym);
+        return;
+    }
+    ORS_Get(&sym);
+    ORG_InitItem(x, ini, ptrtyp->base);
+    if (sym == ORS_lparen) {
+        ORS_Get(&sym);
+        ORG_PrepCall(x, &rx);
+        ParamList(x);
+        ORG_Call(x, rx);
+    } else {
+        ORS_Mark("no (");
+        ORG_PrepCall(x, &rx);
+        ORG_Call(x, rx);
+    }
+    x->type = ptrtyp;
+    x->rdo = FALSE;
+}
+
 static void selector(ORG_Item *x) {
     ORG_Item y;
     ORB_Object *obj;
-    
+
     while ((sym == ORS_lbrak) || (sym == ORS_period) || (sym == ORS_arrow) ||
            ((sym == ORS_lparen) && 
             ((x->type->form == ORB_Record) || (x->type->form == ORB_Pointer)))) {
@@ -226,6 +274,11 @@ static void selector(ORG_Item *x) {
             ORS_Get(&sym);
             if (sym == ORS_ident) {
                 BOOLEAN was_ptr = FALSE;
+                if (x->mode == ORB_Typ) {
+                    /* type-qualified member: constructor call (DDR-004/005) */
+                    ConstructorCall(x);
+                    continue;
+                }
                 if (x->type->form == ORB_Pointer) {
                     ORG_DeRef(x);
                     x->type = x->type->base;
@@ -900,7 +953,13 @@ static void StandProc(LONGINT pno) {
 	  } else if (pno == 5) {  // NEW
 		CheckReadOnly(&x);
 		if ((x.type->form == ORB_Pointer) && (x.type->base->form == ORB_Record)) {
-		  ORG_New(&x);
+		  if (ORB_HasInits(x.type->base)) {
+		    /* DDR-003: a type with initialisers cannot be allocated raw —
+		       the uninitialised-object hole would reopen */
+		    ORS_Mark("type has initialisers; construct with T.Name(...)");
+		  } else {
+		    ORG_New(&x);
+		  }
 		} else {
 		  ORS_Mark("not a pointer to record");
 		}
@@ -2004,6 +2063,43 @@ static void BindMethod(ORB_Object *proc, ORB_Type *type, ORB_Type *rec,
     }
 }
 
+/* Attach an initialiser (DDR-003/004) to its record. Initialisers are
+   statically bound named constructors: no vtable slot, no override
+   relation — a derived initialiser is a new constructor that hides the
+   base type's set (thisinit's nearest-declaring-level rule). */
+static void BindInit(ORB_Object *proc, ORB_Type *rec, const char *rtypname) {
+    ORB_Object *m;
+    char mangled[3 * ORS_IDENT_LEN + 8];
+
+    for (m = rec->dsc; m != NULL; m = m->next) {
+        if (strcmp(m->name, proc->name) == 0) {
+            ORS_Mark("initialiser name clashes with a field");
+        }
+    }
+    for (m = rec->meth; m != NULL; m = m->next) {
+        if (strcmp(m->name, proc->name) == 0) {
+            ORS_Mark("mult def");
+        }
+    }
+
+    proc->initf = TRUE;
+    proc->val = -1;   /* statically bound: no vtable slot */
+
+    snprintf(mangled, sizeof(mangled), "%s__%s__%s", modid, rtypname, proc->name);
+    proc->mname = strdup(mangled);
+
+    proc->next = NULL;
+    if (rec->meth == NULL) {
+        rec->meth = proc;
+    } else {
+        m = rec->meth;
+        while (m->next != NULL) {
+            m = m->next;
+        }
+        m->next = proc;
+    }
+}
+
 static void ProcedureDecl(void) {
     ORB_Object *proc;
     ORB_Type *type;
@@ -2011,8 +2107,8 @@ static void ProcedureDecl(void) {
     ORG_Item x;
     LONGINT locblksize, parblksize, L;
     BOOLEAN int_proc;
-    /* type-bound procedure state (DDR-001/002/007) */
-    BOOLEAN has_rcv, is_override;
+    /* type-bound procedure state (DDR-001..004/007) */
+    BOOLEAN has_rcv, is_override, is_init;
     INTEGER rcvcl;
     ORS_Ident rcvname, rtypname;
     ORB_Type *rcvtyp, *rec;
@@ -2020,6 +2116,7 @@ static void ProcedureDecl(void) {
     int_proc = FALSE;
     has_rcv = FALSE;
     is_override = FALSE;
+    is_init = FALSE;
     rcvcl = 0;
     rcvtyp = NULL;
     rec = NULL;
@@ -2028,8 +2125,9 @@ static void ProcedureDecl(void) {
 
     ORS_Get(&sym);
     if (sym == ORS_init) {
-        /* DDR-003/004: initialisers arrive with the construction step. */
-        ORS_Mark("INIT not yet implemented");
+        /* initialiser (DDR-003/004): allocates at the call site, binds the
+           receiver to the fresh instance, returns it implicitly */
+        is_init = TRUE;
         ORS_Get(&sym);
     }
     if (sym == ORS_times) {
@@ -2100,6 +2198,15 @@ static void ProcedureDecl(void) {
             rec = NULL;
         }
     }
+    if (is_init) {
+        if (!has_rcv) {
+            ORS_Mark("INIT requires a receiver");
+        } else if (rcvcl != ORB_Var) {
+            /* a fresh heap instance is being constructed */
+            ORS_Mark("initialiser receiver must be a pointer, not VAR");
+            rec = NULL;
+        }
+    }
     if (sym == ORS_ident) {
         strcpy(procid, ORS_id);
         ORS_Get(&sym);
@@ -2146,10 +2253,26 @@ static void ProcedureDecl(void) {
         if (has_rcv) {
             type->nofpar++;  /* count the receiver */
         }
+        if (is_init) {
+            /* the constructed instance is the value of the call expression,
+               typed as the receiver type (D7.6) — the heading itself may
+               not name a result */
+            if (type->base->form != ORB_NoTyp) {
+                ORS_Mark("initialiser has no result type");
+            }
+            if (rec != NULL) {
+                type->base = rcvtyp;
+            }
+        }
         if (sym == ORS_override) {
             ORS_Get(&sym);
             if (!has_rcv) {
                 ORS_Mark("OVERRIDE requires a receiver");
+            }
+            if (is_init) {
+                /* a derived initialiser is a new named constructor, never
+                   an override (DDR-003/004) */
+                ORS_Mark("INIT and OVERRIDE are mutually exclusive");
             }
             is_override = TRUE;
         }
@@ -2158,7 +2281,11 @@ static void ProcedureDecl(void) {
            register the method before the body so it can call itself */
         type->dsc = topScope->next;
         if (rec != NULL) {
-            BindMethod(proc, type, rec, rtypname, is_override);
+            if (is_init) {
+                BindInit(proc, rec, rtypname);
+            } else {
+                BindMethod(proc, type, rec, rtypname, is_override);
+            }
         }
         locblksize = 0;
         Declarations(&locblksize, parblksize);
@@ -2186,7 +2313,20 @@ static void ProcedureDecl(void) {
             ORS_Get(&sym);
             StatSequence();
         }
-        if (sym == ORS_return) {
+        if (is_init) {
+            /* the constructed instance is returned implicitly; an explicit
+               RETURN is not part of an initialiser body */
+            if (sym == ORS_return) {
+                ORS_Mark("initialiser has no RETURN");
+                ORS_Get(&sym);
+                expression(&x);   /* recover past the expression */
+            }
+            if ((type->base->form != ORB_NoTyp) && (type->dsc != NULL)) {
+                ORG_MakeItem(&x, type->dsc, level);   /* the receiver */
+            } else {
+                ORG_MakeConstItem(&x, noType, 0);
+            }
+        } else if (sym == ORS_return) {
             ORS_Get(&sym);
             if (type->base->form != ORB_NoTyp) {
                 // Function - must have expression
