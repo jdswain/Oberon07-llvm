@@ -120,12 +120,46 @@ ObjectPtr thisimport(ObjectPtr mod) {
 
 ObjectPtr thisfield(TypePtr rec) {
     ObjectPtr fld = rec->dsc;
-    
+
     while ((fld != NULL) && (strcmp(fld->name, ORS_id) != 0)) {
         fld = fld->next;
     }
-    
+
     return fld;
+}
+
+/* Find the type-bound procedure named ORS_id, searching the record's own
+   method list first and then its base chain — so an override shadows the
+   method it replaces. Methods of imported types are visible only when
+   exported; a record's own module sees everything (mno <= 0). */
+ObjectPtr thismethod(TypePtr rec) {
+    TypePtr t = rec;
+    while (t != NULL) {
+        ObjectPtr m = t->meth;
+        while (m != NULL) {
+            if ((strcmp(m->name, ORS_id) == 0) && (m->expo || t->mno <= 0)) {
+                return m;
+            }
+            m = m->next;
+        }
+        t = t->base;
+    }
+    return NULL;
+}
+
+/* Total vtable slot count including inherited methods. nofmeth is only
+   stamped on records that have own methods (or came from a symbol file),
+   and slots strictly grow down the extension chain, so the max over the
+   chain is the true total even for records that only inherit. */
+int ORB_TotalMeths(TypePtr rec) {
+    int n = 0;
+    while (rec != NULL) {
+        if (rec->nofmeth > n) {
+            n = rec->nofmeth;
+        }
+        rec = rec->base;
+    }
+    return n;
 }
 
 void OpenScope(void) {
@@ -316,7 +350,7 @@ static void Write(Files_Rider *R, int x) {
 static void InType(Files_Rider *R, ObjectPtr thismod, TypePtr *T) {
     int32_t key;
     int ref, class, form, np, readonly;
-    ObjectPtr fld, par, obj, mod, last;
+    ObjectPtr fld, par, obj, mod, last, lastmeth;
     TypePtr t;
     char name[ORS_IDENT_LEN], modname[ORS_IDENT_LEN];
     
@@ -355,37 +389,71 @@ static void InType(Files_Rider *R, ObjectPtr thismod, TypePtr *T) {
             Files_ReadNum(R, &t->len);     /* TD adr/exno */
             Files_ReadNum(R, &t->nofpar);  /* ext level */
             Files_ReadNum(R, &t->size);
-            
+            {
+                LONGINT nm;
+                Files_ReadNum(R, &nm);     /* total vtable slots */
+                t->nofmeth = (int)nm;
+            }
+
             Read(R, &class);
             last = NULL;
-            
-            while (class != 0) {  /* Fields */
-                fld = (ObjectPtr)calloc(1, sizeof(ORB_Object));
-                fld->class = class;
-                Files_ReadString(R, fld->name);
-                
-                if (last == NULL) {
-                    t->dsc = fld;
+            lastmeth = NULL;
+
+            while (class != 0) {  /* Fields and methods */
+                if (class == ORB_Meth) {
+                    /* Type-bound procedure. Non-exported methods are
+                       carried too (real name + mangled symbol): they own
+                       vtable slots that importing modules must fill when
+                       building descriptors for extensions. thismethod()
+                       hides them outside the defining module. */
+                    ObjectPtr mth = (ObjectPtr)calloc(1, sizeof(ORB_Object));
+                    char mn[256];
+                    int k;
+                    mth->class = ORB_Meth;
+                    Files_ReadString(R, mth->name);
+                    Read(R, &k);
+                    mth->expo = (k == 1);
+                    Files_ReadNum(R, &mth->val);   /* vtable slot */
+                    Files_ReadString(R, mn);
+                    mth->mname = strdup(mn);
+                    InType(R, thismod, &mth->type);
+                    mth->lev = -thismod->lev;
+                    if (lastmeth == NULL) {
+                        t->meth = mth;
+                    } else {
+                        lastmeth->next = mth;
+                    }
+                    lastmeth = mth;
                 } else {
-                    last->next = fld;
+                    fld = (ObjectPtr)calloc(1, sizeof(ORB_Object));
+                    fld->class = class;
+                    Files_ReadString(R, fld->name);
+
+                    if (last == NULL) {
+                        t->dsc = fld;
+                    } else {
+                        last->next = fld;
+                    }
+                    last = fld;
+
+                    fld->expo = (fld->name[0] != '\0');
+                    /* Always read the field type — this matches the new
+                       OutType that emits every field, so layout is exactly
+                       reconstructed regardless of export. */
+                    InType(R, thismod, &fld->type);
+                    Files_ReadNum(R, &fld->val);
                 }
-                last = fld;
-                
-                fld->expo = (fld->name[0] != '\0');
-                /* Always read the field type — this matches the new
-                   OutType that emits every field, so layout is exactly
-                   reconstructed regardless of export. */
-                InType(R, thismod, &fld->type);
-                Files_ReadNum(R, &fld->val);
                 Read(R, &class);
             }
-            
+
             if (last == NULL) {
                 t->dsc = obj;
             } else {
                 last->next = obj;
             }
         } else if (form == ORB_Proc) {
+            Read(R, &class);               /* method-type flag */
+            t->mthd = (class == 1);
             InType(R, thismod, &t->base);
             obj = NULL;
             np = 0;
@@ -608,14 +676,17 @@ static void OutType(Files_Rider *R, TypePtr t) {
                 OutType(R, noType);
                 bot = NULL;
             }
-            
+
             /* Write TD byte offset (not exno) so importing modules
                can directly use SB + len for type tag computation */
             Files_WriteNum(R, t->len);
 
             Files_WriteNum(R, t->nofpar);
             Files_WriteNum(R, t->size);
-            
+            /* Total vtable slots incl. inherited — the importer needs it
+               to place new slots when local extensions add methods. */
+            Files_WriteNum(R, ORB_TotalMeths(t));
+
             /* Emit every source-level field with its full type so the
                importing module can reconstruct the record's layout
                exactly. Non-exported fields go out with name="" (empty)
@@ -633,8 +704,25 @@ static void OutType(Files_Rider *R, TypePtr t) {
                 Files_WriteNum(R, fld->val);
                 fld = fld->next;
             }
+            /* Own type-bound procedures, declaration order. Every method
+               goes out — exported or not — with its real name, vtable
+               slot and mangled symbol: extensions compiled elsewhere must
+               fill inherited slots in their descriptors, and the symbol
+               has external linkage regardless of export. The expo byte
+               keeps private methods invisible to source-level lookup. */
+            fld = t->meth;
+            while (fld != NULL) {
+                Write(R, ORB_Meth);
+                Files_WriteString(R, fld->name);
+                Write(R, fld->expo ? 1 : 0);
+                Files_WriteNum(R, fld->val);
+                Files_WriteString(R, fld->mname ? fld->mname : "");
+                OutType(R, fld->type);
+                fld = fld->next;
+            }
             Write(R, 0);
         } else if (t->form == ORB_Proc) {
+            Write(R, t->mthd ? 1 : 0);
             OutType(R, t->base);
             OutPar(R, t->dsc, t->nofpar);
             Write(R, 0);

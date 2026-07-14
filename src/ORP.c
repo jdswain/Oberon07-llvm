@@ -225,16 +225,42 @@ static void selector(ORG_Item *x) {
         } else if (sym == ORS_period) {
             ORS_Get(&sym);
             if (sym == ORS_ident) {
+                BOOLEAN was_ptr = FALSE;
                 if (x->type->form == ORB_Pointer) {
                     ORG_DeRef(x);
                     x->type = x->type->base;
+                    was_ptr = TRUE;
                 }
                 if (x->type->form == ORB_Record) {
                     obj = thisfield(x->type);
+                    if (obj == NULL) {
+                        obj = thismethod(x->type);
+                    }
                     ORS_Get(&sym);
                     if (obj != NULL) {
-                        ORG_Field(x, obj);
-                        x->type = obj->type;
+                        if (obj->class == ORB_Meth) {
+                            /* Type-bound call (DDR-001). Receiver mode:
+                               param 0 of the method type. Pointer-receiver
+                               methods need a pointer designator (only heap
+                               objects are guaranteed a valid tag + refcount
+                               header); VAR-record receivers accept both.
+                               Dispatch is dynamic through a pointer
+                               designator, static on a record designator
+                               (its dynamic type equals its static type). */
+                            ORB_Object *rcv = obj->type->dsc;
+                            if ((rcv != NULL) && (rcv->class == ORB_Var) && !was_ptr) {
+                                ORS_Mark("method requires a pointer receiver");
+                            }
+                            if ((rcv != NULL) && (rcv->class == ORB_Par) && !was_ptr && x->rdo) {
+                                ORS_Mark("read-only receiver");
+                            }
+                            ORG_MethodItem(x, obj, !was_ptr);
+                            x->type = obj->type;
+                            x->rdo = FALSE;
+                        } else {
+                            ORG_Field(x, obj);
+                            x->type = obj->type;
+                        }
                     } else {
                         ORS_Mark("undef");
                     }
@@ -275,8 +301,9 @@ static void selector(ORG_Item *x) {
 static BOOLEAN EqualSignatures(ORB_Type *t0, ORB_Type *t1) {
     ORB_Object *p0, *p1;
     BOOLEAN com = TRUE;
-    
-    if ((t0->base == t1->base) && (t0->nofpar == t1->nofpar)) {
+
+    if ((t0->base == t1->base) && (t0->nofpar == t1->nofpar) &&
+        (t0->mthd == t1->mthd)) {
         p0 = t0->dsc;
         p1 = t1->dsc;
         while (p0 != NULL) {
@@ -297,6 +324,42 @@ static BOOLEAN EqualSignatures(ORB_Type *t0, ORB_Type *t1) {
         com = FALSE;
     }
     return com;
+}
+
+/* Override check (DDR-002): identical signatures, receiver excluded — the
+   receiver types necessarily differ (base vs extension); only its mode
+   (pointer value vs VAR record) must agree. */
+static BOOLEAN MethodSigMatch(ORB_Type *t0, ORB_Type *t1) {
+    ORB_Object *p0, *p1;
+    INTEGER n;
+
+    if ((t0->base != t1->base) || (t0->nofpar != t1->nofpar)) {
+        return FALSE;
+    }
+    p0 = t0->dsc;
+    p1 = t1->dsc;
+    if ((p0 == NULL) || (p1 == NULL) || (p0->class != p1->class)) {
+        return FALSE;   /* receiver mode mismatch */
+    }
+    p0 = p0->next;
+    p1 = p1->next;
+    n = t0->nofpar - 1;
+    while (n > 0) {
+        if ((p0 != NULL) && (p1 != NULL) &&
+            (p0->class == p1->class) && (p0->rdo == p1->rdo) &&
+            ((p0->type == p1->type) ||
+             ((p0->type->form == ORB_Array) && (p1->type->form == ORB_Array) &&
+              (p0->type->len == p1->type->len) && (p0->type->base == p1->type->base)) ||
+             ((p0->type->form == ORB_Proc) && (p1->type->form == ORB_Proc) &&
+              EqualSignatures(p0->type, p1->type)))) {
+            p0 = p0->next;
+            p1 = p1->next;
+            n--;
+        } else {
+            return FALSE;
+        }
+    }
+    return TRUE;
 }
 
 static BOOLEAN CompTypes(ORB_Type *t0, ORB_Type *t1, BOOLEAN varpar) {
@@ -362,7 +425,15 @@ static void Parameter(ORB_Object *par) {
 static void ParamList(ORG_Item *x) {
     INTEGER n = 0;
     ORB_Object *par = x->type->dsc;
-    
+    INTEGER nexplicit = x->type->nofpar;
+
+    /* Type-bound call: the receiver is param 0 but never written at the
+       call site — ORG_PrepCall already pushed it from the designator. */
+    if (x->type->mthd && (par != NULL)) {
+        par = par->next;
+        nexplicit--;
+    }
+
     if (sym != ORS_rparen) {
         Parameter(par);
         n = 1;
@@ -378,10 +449,10 @@ static void ParamList(ORG_Item *x) {
     } else {
         ORS_Get(&sym);
     }
-    
-    if (n < x->type->nofpar) {
+
+    if (n < nexplicit) {
         ORS_Mark("too few params");
-    } else if (n > x->type->nofpar) {
+    } else if (n > nexplicit) {
         ORS_Mark("too many params");
     }
 }
@@ -1012,7 +1083,7 @@ static void StatSequence(void) {
                         ParamList(&x);
                     }
                 } else if (x.type->form == ORB_Proc) {  // procedure call without parameters
-                    if (x.type->nofpar > 0) {
+                    if (x.type->nofpar - (x.type->mthd ? 1 : 0) > 0) {
                         ORS_Mark("missing parameters");
                     }
                     if (x.type->base->form == ORB_NoTyp) {
@@ -1859,6 +1930,80 @@ static void Declarations(LONGINT *varsize, LONGINT parblksize) {
     }
 }
 
+/* Attach a parsed type-bound procedure to its record (DDR-001) and enforce
+   the override rules (DDR-002): redefining an inherited method requires
+   OVERRIDE plus an identical signature; OVERRIDE with nothing to override,
+   or hiding without OVERRIDE, are errors. A genuinely new method takes the
+   next vtable slot. Slot indices are fixed the moment they are assigned
+   (single-pass), so once an extension has taken a new slot, its ancestors'
+   slot layout is frozen: they may still be overridden, but may not gain
+   further new methods (mfixed). */
+static void BindMethod(ORB_Object *proc, ORB_Type *type, ORB_Type *rec,
+                       const char *rtypname, BOOLEAN is_override) {
+    ORB_Object *m, *bm;
+    ORB_Type *bt;
+    char mangled[3 * ORS_IDENT_LEN + 8];
+
+    for (m = rec->dsc; m != NULL; m = m->next) {
+        if (strcmp(m->name, proc->name) == 0) {
+            ORS_Mark("method name clashes with a field");
+        }
+    }
+    for (m = rec->meth; m != NULL; m = m->next) {
+        if (strcmp(m->name, proc->name) == 0) {
+            ORS_Mark("mult def");
+        }
+    }
+
+    /* nearest visible inherited method of the same name */
+    bm = NULL;
+    for (bt = rec->base; (bt != NULL) && (bm == NULL); bt = bt->base) {
+        for (m = bt->meth; m != NULL; m = m->next) {
+            if ((strcmp(m->name, proc->name) == 0) && (m->expo || bt->mno <= 0)) {
+                bm = m;
+                break;
+            }
+        }
+    }
+
+    if (bm != NULL) {
+        if (!is_override) {
+            ORS_Mark("hides an inherited method; add OVERRIDE");
+        }
+        if (!MethodSigMatch(type, bm->type)) {
+            ORS_Mark("override signature differs from base method");
+        }
+        proc->val = bm->val;               /* reuse the base slot */
+    } else {
+        if (is_override) {
+            ORS_Mark("no inherited method to override");
+        }
+        if (rec->mfixed) {
+            ORS_Mark("declare base-type methods before extension methods");
+        }
+        proc->val = ORB_TotalMeths(rec);   /* next free slot */
+        rec->nofmeth = (int)proc->val + 1;
+        for (bt = rec->base; bt != NULL; bt = bt->base) {
+            bt->mfixed = TRUE;
+        }
+    }
+
+    snprintf(mangled, sizeof(mangled), "%s__%s__%s", modid, rtypname, proc->name);
+    proc->mname = strdup(mangled);
+
+    /* append — declaration order keeps vtable build and .smb deterministic */
+    proc->next = NULL;
+    if (rec->meth == NULL) {
+        rec->meth = proc;
+    } else {
+        m = rec->meth;
+        while (m->next != NULL) {
+            m = m->next;
+        }
+        m->next = proc;
+    }
+}
+
 static void ProcedureDecl(void) {
     ORB_Object *proc;
     ORB_Type *type;
@@ -1866,17 +2011,107 @@ static void ProcedureDecl(void) {
     ORG_Item x;
     LONGINT locblksize, parblksize, L;
     BOOLEAN int_proc;
-    
+    /* type-bound procedure state (DDR-001/002/007) */
+    BOOLEAN has_rcv, is_override;
+    INTEGER rcvcl;
+    ORS_Ident rcvname, rtypname;
+    ORB_Type *rcvtyp, *rec;
+
     int_proc = FALSE;
+    has_rcv = FALSE;
+    is_override = FALSE;
+    rcvcl = 0;
+    rcvtyp = NULL;
+    rec = NULL;
+    rcvname[0] = 0;
+    rtypname[0] = 0;
+
     ORS_Get(&sym);
+    if (sym == ORS_init) {
+        /* DDR-003/004: initialisers arrive with the construction step. */
+        ORS_Mark("INIT not yet implemented");
+        ORS_Get(&sym);
+    }
     if (sym == ORS_times) {
         ORS_Get(&sym);
         int_proc = TRUE;
     }
+    if (sym == ORS_lparen) {
+        /* receiver section: PROCEDURE (r: T) M ...  (DDR-001/007) */
+        has_rcv = TRUE;
+        ORS_Get(&sym);
+        if (sym == ORS_var) {
+            ORS_Get(&sym);
+            rcvcl = ORB_Par;
+        } else {
+            rcvcl = ORB_Var;
+        }
+        if (sym == ORS_ident) {
+            strcpy(rcvname, ORS_id);
+            ORS_Get(&sym);
+        } else {
+            ORS_Mark("receiver name expected");
+        }
+        Check(ORS_colon, "no :");
+        if (sym == ORS_ident) {
+            ORB_Object *tobj;
+            qualident(&tobj);
+            if (tobj->class == ORB_Typ) {
+                rcvtyp = tobj->type;
+                strcpy(rtypname, tobj->name);
+            } else {
+                ORS_Mark("receiver type expected");
+            }
+        } else {
+            ORS_Mark("receiver type expected");
+        }
+        Check(ORS_rparen, "no )");
+        if (rcvtyp != NULL) {
+            if (rcvcl == ORB_Var) {
+                /* value receiver: pointer to record (dynamic dispatch) */
+                if ((rcvtyp->form == ORB_Pointer) && (rcvtyp->base != NULL) &&
+                    (rcvtyp->base->form == ORB_Record)) {
+                    rec = rcvtyp->base;
+                } else {
+                    ORS_Mark("receiver must be POINTER TO record (or VAR with a record type)");
+                }
+            } else {
+                /* VAR receiver: record (static dispatch) */
+                if (rcvtyp->form == ORB_Record) {
+                    rec = rcvtyp;
+                } else {
+                    ORS_Mark("VAR receiver must have record type");
+                }
+            }
+        }
+        if (rec != NULL) {
+            if (rec->mno > 0) {
+                ORS_Mark("cannot bind method to imported type");
+                rec = NULL;
+            } else if (rec->typobj == NULL) {
+                /* the type descriptor is a cross-module symbol named after
+                   the record; an anonymous record has no stable name */
+                ORS_Mark("receiver's record type must be named");
+                rec = NULL;
+            }
+        }
+        if (level != 0) {
+            ORS_Mark("methods must be declared at module level");
+            rec = NULL;
+        }
+    }
     if (sym == ORS_ident) {
         strcpy(procid, ORS_id);
         ORS_Get(&sym);
-        NewObj(&proc, procid, ORB_Const);
+        if (has_rcv) {
+            /* Type-bound: named in the record's method list, not in the
+               module scope — `M` alone must not resolve. */
+            proc = (ORB_Object*)calloc(1, sizeof(ORB_Object));
+            strcpy(proc->name, procid);
+            proc->class = ORB_Meth;
+        } else {
+            NewObj(&proc, procid, ORB_Const);
+        }
         if (int_proc) {
             parblksize = 12;
         } else {
@@ -1889,18 +2124,47 @@ static void ProcedureDecl(void) {
         proc->val = -1;
         proc->lev = level;
         CheckExport(&proc->expo);
-        if (proc->expo) {
+        if (proc->expo && !has_rcv) {
             proc->exno = exno;
             exno++;
         }
         OpenScope();
         level++;
         type->base = noType;
+        if (has_rcv) {
+            /* the receiver is the hidden first parameter */
+            ORB_Object *rp;
+            type->mthd = TRUE;
+            NewObj(&rp, rcvname, rcvcl);
+            rp->type = rcvtyp;
+            rp->lev = level;
+            rp->rdo = FALSE;
+            rp->val = 1;
+            parblksize = parblksize + ((rcvcl == ORB_Par) ? 2 * WordSize : WordSize);
+        }
         ProcedureType(type, &parblksize);
+        if (has_rcv) {
+            type->nofpar++;  /* count the receiver */
+        }
+        if (sym == ORS_override) {
+            ORS_Get(&sym);
+            if (!has_rcv) {
+                ORS_Mark("OVERRIDE requires a receiver");
+            }
+            is_override = TRUE;
+        }
         Check(ORS_semicolon, "no ;");
+        /* params are fully in scope; expose them for signature checks and
+           register the method before the body so it can call itself */
+        type->dsc = topScope->next;
+        if (rec != NULL) {
+            BindMethod(proc, type, rec, rtypname, is_override);
+        }
         locblksize = 0;
         Declarations(&locblksize, parblksize);
-        proc->val = ORG_Here();
+        if (proc->class != ORB_Meth) {
+            proc->val = ORG_Here();   /* methods keep their vtable slot in val */
+        }
         proc->type->dsc = topScope->next;
         if (sym == ORS_procedure) {
             L = 0;
@@ -1910,7 +2174,9 @@ static void ProcedureDecl(void) {
                 Check(ORS_semicolon, "no ;");
             } while (sym == ORS_procedure);
             ORG_FixOne(L);
-            proc->val = ORG_Here();  // 65C816 uses byte addresses, no multiplication needed
+            if (proc->class != ORB_Meth) {
+                proc->val = ORG_Here();  // 65C816 uses byte addresses, no multiplication needed
+            }
             proc->type->dsc = topScope->next;
         }
         // Store frame size in procedure type for caller access

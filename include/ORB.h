@@ -29,7 +29,7 @@
 #include "Files.h"
 
 /* Constants */
-#define versionkey 1
+#define versionkey 2   /* v2: type-bound procedures in record types (DDR-001/002) */
 #define maxTypTab 64
 
 /* Class values */
@@ -42,6 +42,7 @@
 #define ORB_SProc 6
 #define ORB_SFunc 7
 #define ORB_Mod 8
+#define ORB_Meth 9   /* type-bound procedure; lives in a record's meth list */
 
 /* Form values */
 #define ORB_Byte 1
@@ -74,7 +75,11 @@ typedef struct ORB_Object {
     ObjectPtr dsc;
     TypePtr type;
     Ident name;
-    LONGINT val;
+    LONGINT val;           /* for ORB_Meth: vtable slot index */
+    char *mname;           /* ORB_Meth only: mangled symbol Mod__RcvType__Name.
+                              Carried in the .smb so importing modules can
+                              reference inherited method implementations in
+                              their own type descriptors. */
     void *backend;         /* codegen-private: e.g. LLVMValueRef */
     void *backend2;        /* codegen-private: aux (e.g. open-array length slot) */
 } ORB_Object;
@@ -98,6 +103,16 @@ typedef struct ORB_Type {
                           such pointers also don't appear in record TD ptr_offsets
                           so their targets aren't released by oc_release_fields.
                           Used to break reference cycles. */
+    /* Type-bound procedures (DDR-001). Records only. */
+    ObjectPtr meth;    /* own methods (class ORB_Meth), declaration order;
+                          inherited methods stay in the base's list */
+    int nofmeth;       /* total vtable slots incl. inherited, valid once this
+                          record has own methods (or was imported); use
+                          ORB_TotalMeths for the always-correct total */
+    BOOLEAN mfixed;    /* an extension has taken a new vtable slot, so this
+                          record may not add further new-slot methods
+                          (single-pass slot-assignment guard) */
+    BOOLEAN mthd;      /* on Proc types: first param is a method receiver */
     void *backend;     /* codegen-private: e.g. LLVMTypeRef */
     void *backend2;    /* codegen-private: e.g. type-descriptor global */
 } ORB_Type;
@@ -122,6 +137,8 @@ void NewObj(ObjectPtr *obj, const char *id, int class);
 ObjectPtr thisObj(void);
 ObjectPtr thisimport(ObjectPtr mod);
 ObjectPtr thisfield(TypePtr rec);
+ObjectPtr thismethod(TypePtr rec);   /* ORS_id lookup along the base chain */
+int ORB_TotalMeths(TypePtr rec);     /* total vtable slots incl. inherited */
 void OpenScope(void);
 void CloseScope(void);
 void SetSourceDirectory(const char *source_filename);

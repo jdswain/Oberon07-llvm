@@ -54,11 +54,27 @@ static char           ModName[128];
 static LLVMTypeRef Ty_i1, Ty_i8, Ty_i32, Ty_i64, Ty_float, Ty_void, Ty_ptr;
 
 // Type descriptor prefix. Every record's TD begins with this struct; the
-// trailing ptr_offsets array (variable length) lives after. Used by the
-// IS-test and (later) by oc_release to find pointer fields.
+// vtable ([nofmeth x ptr]) and the ptr_offsets array (variable length,
+// -1-terminated) follow it, in that order. The prefix is used by the
+// IS-test; oc_release skips nofmeth pointer slots to reach ptr_offsets.
 //
-//   { i64 size, i32 ext_level, i32 _pad, [TD_LEVELS x ptr] ancestors }
+//   { i64 size, i32 ext_level, i32 nofmeth, [TD_LEVELS x ptr] ancestors }
 static LLVMTypeRef Ty_TDPrefix;
+
+// Dispatch view of a TD: the prefix plus a flexible vtable member, so a
+// method call can GEP tag.vtable[slot] without knowing the concrete
+// (per-type) descriptor struct.
+//
+//   { i64, i32, i32, [TD_LEVELS x ptr], [0 x ptr] vtable }
+static LLVMTypeRef Ty_TDDispatch;
+
+// Type descriptors whose struct body + initializer are deferred to
+// ORG_Close: the vtable contents aren't final until every method of the
+// module has been declared (methods follow the TYPE section).
+#define MAX_PENDING_TDS 256
+#define MAX_VTBL_SLOTS  128
+static ORB_Type *PendingTDs[MAX_PENDING_TDS];
+static int       NumPendingTDs;
 
 // Cached target info — set once on first ORG_Open and reused for every
 // emitted module. Triple/layout get stamped onto each module so the
@@ -295,11 +311,17 @@ static const char *find_module_name(ORB_Object *obj) {
 // Lazily declare an LLVM function for an Oberon procedure. Imported procs get
 // their owning module's prefix and stay external (no body); local procs get
 // our module's prefix and pick up internal/external linkage in ORG_Enter.
+// Type-bound procedures carry their mangled symbol (Mod__RcvType__Name) in
+// mname — assigned at declaration or read from the symbol file.
 static LLVMValueRef LookupProc(ORB_Object *proc) {
     if (proc->backend) return (LLVMValueRef)proc->backend;
     LLVMTypeRef ft = ProcType(proc->type);
     char qname[200];
-    snprintf(qname, sizeof(qname), "%s__%s", find_module_name(proc), proc->name);
+    if (proc->class == ORB_Meth && proc->mname) {
+        snprintf(qname, sizeof(qname), "%s", proc->mname);
+    } else {
+        snprintf(qname, sizeof(qname), "%s__%s", find_module_name(proc), proc->name);
+    }
     // Reuse an existing extern declaration if one was already created (e.g.
     // by ORG_Header for an imported module's init function).
     LLVMValueRef fn = LLVMGetNamedFunction(Mod, qname);
@@ -382,67 +404,156 @@ static void record_ptr_offsets(ORB_Type *t, int32_t base_off,
     }
 }
 
+// Find the defining module's name for a type (mno > 0 means imported).
+static const char *module_name_of_type(ORB_Type *t) {
+    if (t->mno <= 0) return ModName;
+    ObjectPtr scope = topScope;
+    while (scope) {
+        for (ObjectPtr o = scope->next; o; o = o->next) {
+            if (o->class == ORB_Mod && o->lev == t->mno) {
+                return ((ModulePtr)o)->orgname;
+            }
+        }
+        scope = scope->dsc;
+    }
+    return ModName;
+}
+
+// Get (or create) the TD global for a record type.
+//
+// Named records have exactly ONE descriptor definition — in their defining
+// module, external linkage, symbol <DefMod>__<RecName>__td. Importing
+// modules emit an extern declaration. This is what makes cross-module IS /
+// type guards and vtable dispatch agree on identity: a tag stamped by the
+// defining module's oc_alloc compares equal everywhere.
+//
+// Anonymous records keep the old behaviour (module-private copy): they
+// cannot be extended or method-bound, so nothing dispatches through them.
+//
+// For locally-defined records the struct body and initializer are deferred
+// to finalize_tds() (ORG_Close): the vtable isn't complete until all of
+// the module's methods have been parsed.
 static LLVMValueRef record_td(ORB_Type *t) {
     if (!t || t->form != ORB_Record) return LLVMConstNull(Ty_ptr);
     if (t->backend2) return (LLVMValueRef)t->backend2;
 
-    int self_level = t->nofpar;
-
-    // Forward-declare the global so self-references resolve. Use the
-    // concrete struct type once we know the ptr_offsets length.
     char tdname[256];
-    const char *tn = (t->typobj && t->typobj->name[0]) ? t->typobj->name : "anon";
-    snprintf(tdname, sizeof(tdname), "%s__%s__td", ModName, tn);
+    const char *tn = (t->typobj && t->typobj->name[0]) ? t->typobj->name : NULL;
 
-    // Collect ptr offsets. base_off=0 means "relative to the user pointer"
-    // — oc_release receives the user pointer (after the {tag,refcount}
-    // header), so offsets here directly index into the record body.
-    int32_t offsets[64];
-    int n_off = 0;
-    record_ptr_offsets(t, 0, offsets, &n_off, 63);
-    offsets[n_off++] = -1;   // terminator
+    if (t->mno > 0 && tn) {
+        // Imported named record — extern reference to the single definition.
+        snprintf(tdname, sizeof(tdname), "%s__%s__td", module_name_of_type(t), tn);
+        LLVMValueRef td = LLVMGetNamedGlobal(Mod, tdname);
+        if (!td) {
+            td = LLVMAddGlobal(Mod, Ty_TDPrefix, tdname);
+            LLVMSetLinkage(td, LLVMExternalLinkage);
+            LLVMSetGlobalConstant(td, 1);
+        }
+        t->backend2 = td;
+        return td;
+    }
 
-    LLVMTypeRef ancestors_ty = LLVMArrayType2(Ty_ptr, TD_LEVELS);
-    LLVMTypeRef tail_ty = LLVMArrayType2(Ty_i32, n_off);
-    LLVMTypeRef td_field_ty[] = {
-        Ty_i64, Ty_i32, Ty_i32, ancestors_ty, tail_ty,
-    };
-    LLVMTypeRef td_ty = LLVMStructTypeInContext(Ctx, td_field_ty, 5, 0);
-
-    LLVMValueRef td = LLVMAddGlobal(Mod, td_ty, tdname);
-    LLVMSetLinkage(td, LLVMInternalLinkage);
+    if (tn) {
+        snprintf(tdname, sizeof(tdname), "%s__%s__td", ModName, tn);
+    } else {
+        snprintf(tdname, sizeof(tdname), "%s__anon%d__td", ModName, NumPendingTDs);
+    }
+    char styname[264];
+    snprintf(styname, sizeof(styname), "%s_ty", tdname);
+    LLVMTypeRef st = LLVMStructCreateNamed(Ctx, styname);
+    LLVMValueRef td = LLVMAddGlobal(Mod, st, tdname);
+    LLVMSetLinkage(td, tn ? LLVMExternalLinkage : LLVMInternalLinkage);
     LLVMSetGlobalConstant(td, 1);
-    t->backend2 = td;   // cache before recursing on ancestors
+    t->backend2 = td;
+    if (NumPendingTDs < MAX_PENDING_TDS) {
+        PendingTDs[NumPendingTDs++] = t;
+    } else {
+        ORS_Mark("too many type descriptors");
+    }
+    return td;
+}
 
-    // Build ancestors after caching `td` so self-reference works.
-    LLVMValueRef anc_vals[TD_LEVELS];
-    for (int level = 0; level < TD_LEVELS; level++) {
-        if (level > self_level) {
-            anc_vals[level] = LLVMConstNull(Ty_ptr);
-        } else {
-            ORB_Type *anc = type_at_level(t, level);
-            anc_vals[level] = (anc == t) ? td : record_td(anc);
+// Fill in the deferred TD bodies + initializers. Called from ORG_Close,
+// when every method of the module is known. Iterates by index because
+// ancestor lookups can append new pending TDs mid-loop.
+static void finalize_tds(void) {
+    // The defining module must emit a TD for every named record it
+    // declares, even if it never allocates or type-tests one itself —
+    // importing modules reference the symbol (extensions' descriptors,
+    // IS-tests, dispatch). Demand-only emission would leave it undefined.
+    for (ObjectPtr o = topScope ? topScope->next : NULL; o; o = o->next) {
+        if (o->class == ORB_Typ && o->type &&
+            o->type->form == ORB_Record && o->type->mno <= 0) {
+            record_td(o->type);
         }
     }
+    for (int i = 0; i < NumPendingTDs; i++) {
+        ORB_Type *t = PendingTDs[i];
+        LLVMValueRef td = (LLVMValueRef)t->backend2;
+        LLVMTypeRef st = LLVMGlobalGetValueType(td);
 
-    LLVMValueRef offset_consts[64];
-    for (int i = 0; i < n_off; i++) {
-        offset_consts[i] = LLVMConstInt(Ty_i32, (uint64_t)(int64_t)offsets[i], 1);
+        // Collect ptr offsets. base_off=0 means "relative to the user
+        // pointer" — oc_release receives the user pointer (after the
+        // {tag,refcount} header), so offsets index the record body.
+        int32_t offsets[64];
+        int n_off = 0;
+        record_ptr_offsets(t, 0, offsets, &n_off, 63);
+        offsets[n_off++] = -1;   // terminator
+
+        int self_level = t->nofpar;
+        LLVMValueRef anc_vals[TD_LEVELS];
+        for (int level = 0; level < TD_LEVELS; level++) {
+            if (level > self_level) {
+                anc_vals[level] = LLVMConstNull(Ty_ptr);
+            } else {
+                ORB_Type *anc = type_at_level(t, level);
+                anc_vals[level] = (anc == t) ? td : record_td(anc);
+            }
+        }
+
+        // vtable: most-derived implementation per slot. Walking derived →
+        // base and keeping the first writer gives overrides precedence.
+        int nm = ORB_TotalMeths(t);
+        if (nm > MAX_VTBL_SLOTS) {
+            ORS_Mark("too many methods");
+            nm = MAX_VTBL_SLOTS;
+        }
+        LLVMValueRef vt[MAX_VTBL_SLOTS];
+        for (int k = 0; k < nm; k++) vt[k] = NULL;
+        for (ORB_Type *a = t; a; a = a->base) {
+            for (ObjectPtr m = a->meth; m; m = m->next) {
+                if (m->val >= 0 && m->val < nm && vt[m->val] == NULL) {
+                    vt[m->val] = LookupProc(m);
+                }
+            }
+        }
+        for (int k = 0; k < nm; k++) {
+            if (!vt[k]) vt[k] = LLVMConstNull(Ty_ptr);
+        }
+
+        LLVMTypeRef ancestors_ty = LLVMArrayType2(Ty_ptr, TD_LEVELS);
+        LLVMTypeRef vtbl_ty = LLVMArrayType2(Ty_ptr, (unsigned)nm);
+        LLVMTypeRef tail_ty = LLVMArrayType2(Ty_i32, n_off);
+        LLVMTypeRef fields[6] = { Ty_i64, Ty_i32, Ty_i32,
+                                  ancestors_ty, vtbl_ty, tail_ty };
+        LLVMStructSetBody(st, fields, 6, 0);
+
+        LLVMValueRef offset_consts[64];
+        for (int k = 0; k < n_off; k++) {
+            offset_consts[k] = LLVMConstInt(Ty_i32, (uint64_t)(int64_t)offsets[k], 1);
+        }
+
+        LLVMValueRef init_fields[6] = {
+            LLVMSizeOf(LlvmType(t)),
+            LLVMConstInt(Ty_i32, (uint64_t)self_level, 0),
+            LLVMConstInt(Ty_i32, (uint64_t)nm, 0),
+            LLVMConstArray2(Ty_ptr, anc_vals, TD_LEVELS),
+            LLVMConstArray2(Ty_ptr, vt, (uint64_t)nm),
+            LLVMConstArray2(Ty_i32, offset_consts, n_off),
+        };
+        LLVMSetInitializer(td, LLVMConstNamedStruct(st, init_fields, 6));
     }
-
-    LLVMTypeRef record_lt = LlvmType(t);
-    LLVMValueRef size_val = LLVMSizeOf(record_lt);
-
-    LLVMValueRef init_fields[5] = {
-        size_val,
-        LLVMConstInt(Ty_i32, (uint64_t)self_level, 0),
-        LLVMConstInt(Ty_i32, 0, 0),
-        LLVMConstArray2(Ty_ptr, anc_vals, TD_LEVELS),
-        LLVMConstArray2(Ty_i32, offset_consts, n_off),
-    };
-    LLVMValueRef init = LLVMConstNamedStruct(td_ty, init_fields, 5);
-    LLVMSetInitializer(td, init);
-    return td;
+    NumPendingTDs = 0;
 }
 
 // --- ARC retain/release helpers ---
@@ -744,6 +855,53 @@ void ORG_DeRef(ORG_Item *x) {
     if (x->backend) {
         x->backend = LLVMBuildLoad2(Bld, Ty_ptr, (LLVMValueRef)x->backend, "deref");
     }
+}
+
+// Resolve designator `x.m` into a callable item (type-bound call, DDR-001).
+// On entry x is the receiver designator: after the parser's auto-deref,
+// x->backend holds the record's address — which is also exactly the
+// receiver argument value, for both receiver modes (a pointer value and a
+// VAR-record address are the same LLVM ptr).
+//
+//   direct — record designator: its dynamic type equals its static type,
+//            so bind statically (plain direct call, DDR-001 §5).
+//   else   — pointer designator: load the tag and index the vtable at the
+//            method's slot; the call is indirect through that slot.
+//
+// The receiver value is stashed in x->backend2; ORG_PrepCall pushes it as
+// the hidden first argument when the call frame opens.
+void ORG_MethodItem(ORG_Item *x, ORB_Object *m, BOOLEAN direct) {
+    LLVMValueRef rcv = (LLVMValueRef)x->backend;
+    LLVMValueRef fn;
+    if (!rcv) {
+        ORS_Mark("internal: method receiver has no backend");
+        x->mode = ORB_Const;
+        x->backend = NULL;
+        x->backend2 = NULL;
+        return;
+    }
+    if (direct) {
+        fn = LookupProc(m);
+        x->mode = ORB_Const;   // like a named-procedure item (ORG_MakeItem)
+    } else {
+        LLVMTypeRef rec_lt = LlvmType(x->type);  // x->type is still the record
+        LLVMValueRef tag_slot = LLVMBuildStructGEP2(Bld, rec_lt, rcv, 0, "tag_slot");
+        LLVMValueRef tag = LLVMBuildLoad2(Bld, Ty_ptr, tag_slot, "tag");
+        LLVMValueRef indices[3] = {
+            LLVMConstInt(Ty_i32, 0, 0),
+            LLVMConstInt(Ty_i32, 4, 0),                    // vtable member
+            LLVMConstInt(Ty_i32, (uint64_t)m->val, 0)      // slot
+        };
+        LLVMValueRef slot = LLVMBuildGEP2(Bld, Ty_TDDispatch, tag, indices, 3, "vslot");
+        fn = LLVMBuildLoad2(Bld, Ty_ptr, slot, "vfn");
+        x->mode = Reg;
+    }
+    x->backend = fn;
+    x->backend2 = rcv;
+    x->a = 0;
+    x->b = 0;
+    x->r = 0;
+    x->rdo = FALSE;
 }
 
 // --- Type metadata / type tests ---
@@ -1486,7 +1644,6 @@ void ORG_FixLink(LONGINT L) {
 
 // --- Procedure calls ---
 void ORG_PrepCall(ORG_Item *x, LONGINT *r) {
-    (void)x;
     if (CallTop + 1 >= MAX_CALL_DEPTH) {
         ORS_Mark("call stack overflow");
         *r = 0;
@@ -1495,6 +1652,12 @@ void ORG_PrepCall(ORG_Item *x, LONGINT *r) {
     CallTop++;
     CallArgC[CallTop] = 0;
     for (int i = 0; i < MAX_CALL_ARGS; i++) CallArgOwned[CallTop][i] = FALSE;
+    // Type-bound call: the receiver stashed by ORG_MethodItem becomes the
+    // hidden first argument. It comes from a designator the caller still
+    // holds, so it's a +0 borrow — no ownership flag.
+    if (x && x->type && x->type->form == ORB_Proc && x->type->mthd && x->backend2) {
+        CallArgs[CallTop][CallArgC[CallTop]++] = (LLVMValueRef)x->backend2;
+    }
     *r = CallTop;
 }
 
@@ -1551,7 +1714,10 @@ void ORG_Enter(ORB_Object *proc, ORB_Object *params, LONGINT parblksize, LONGINT
     (void)parblksize; (void)locblksize; (void)int_proc;
 
     LLVMValueRef fn = LookupProc(proc);
-    if (!proc->expo) LLVMSetLinkage(fn, LLVMInternalLinkage);
+    // Methods keep external linkage even when not exported: importing
+    // modules reference them by mangled name when building descriptors
+    // for extensions (privacy is a compile-time concept, not a link one).
+    if (!proc->expo && proc->class != ORB_Meth) LLVMSetLinkage(fn, LLVMInternalLinkage);
     CurFn = fn;
 
     LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(Ctx, fn, "entry");
@@ -2033,10 +2199,18 @@ void ORG_Open(const char *modid, INTEGER v) {
             LLVMTypeRef td_fields[] = {
                 Ty_i64,                                  // size
                 Ty_i32,                                  // ext_level
-                Ty_i32,                                  // _pad
+                Ty_i32,                                  // nofmeth
                 LLVMArrayType2(Ty_ptr, TD_LEVELS),       // ancestors
             };
             Ty_TDPrefix = LLVMStructTypeInContext(Ctx, td_fields, 4, 0);
+            LLVMTypeRef tdd_fields[] = {
+                Ty_i64,                                  // size
+                Ty_i32,                                  // ext_level
+                Ty_i32,                                  // nofmeth
+                LLVMArrayType2(Ty_ptr, TD_LEVELS),       // ancestors
+                LLVMArrayType2(Ty_ptr, 0),               // vtable (flexible)
+            };
+            Ty_TDDispatch = LLVMStructTypeInContext(Ctx, tdd_fields, 5, 0);
         }
 
         // One-shot target setup so each module carries the correct
@@ -2079,6 +2253,7 @@ void ORG_Open(const char *modid, INTEGER v) {
         if (err) LLVMDisposeMessage(err);
     }
 
+    NumPendingTDs = 0;
     strncpy(ModName, modid ? modid : "module", sizeof(ModName) - 1);
     ModName[sizeof(ModName) - 1] = 0;
     Mod = LLVMModuleCreateWithNameInContext(ModName, Ctx);
@@ -2243,6 +2418,10 @@ void ORG_Close(Ident modid, LONGINT key, LONGINT nofent) {
             LLVMSetLinkage(ModInit, LLVMWeakAnyLinkage);
         }
     }
+
+    /* Deferred type descriptors: the vtables are only complete now that
+       every method declaration has been seen. */
+    finalize_tds();
 
     /* Emit the runtime-introspectable exports table for this module. */
     emit_exports_table(modid);

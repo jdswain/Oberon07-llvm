@@ -57,6 +57,9 @@ void ORG_MakeItem(ORG_Item *x, ORB_Object *y, LONGINT curlev);
 void ORG_Field(ORG_Item *x, ORB_Object *y);
 void ORG_Index(ORG_Item *x, ORG_Item *y);
 void ORG_DeRef(ORG_Item *x);
+// Turn designator `x.m` into a callable item (type-bound call, DDR-001).
+// direct = static binding; otherwise dispatch through the receiver's tag.
+void ORG_MethodItem(ORG_Item *x, ORB_Object *m, BOOLEAN direct);
 
 // Type operations
 void ORG_BuildTD(ORB_Type *T, LONGINT *dc);
