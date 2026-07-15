@@ -28,7 +28,8 @@ MODULE Ctors;
 
   PROCEDURE INIT (s: SConn) CreateWithKey* (k: INTEGER);
   BEGIN
-    s.host := 9; s.port := 443; s.key := k
+    SUPER.Create(9, 443);   (* DDR-003: derived initialisers chain to the base *)
+    s.key := k
   END CreateWithKey;
 
   (* methods and constructors coexist on one type *)
