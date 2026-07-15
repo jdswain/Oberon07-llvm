@@ -143,6 +143,7 @@ ObjectPtr thisfield(TypePtr rec);
 ObjectPtr thismethod(TypePtr rec);   /* ORS_id lookup along the base chain */
 ObjectPtr thisinit(TypePtr rec);     /* ORS_id initialiser lookup (DDR-003 rule) */
 BOOLEAN ORB_HasInits(TypePtr rec);   /* any initialiser on the chain (NEW policy) */
+BOOLEAN ORB_HasVisibleInits(TypePtr rec); /* constructor set reachable from here */
 int ORB_TotalMeths(TypePtr rec);     /* total vtable slots incl. inherited */
 void OpenScope(void);
 void CloseScope(void);

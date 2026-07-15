@@ -179,6 +179,35 @@ ObjectPtr thisinit(TypePtr rec) {
     return NULL;
 }
 
+/* True when the constructor set that governs `rec` (the nearest declaring
+   level, per thisinit) contains at least one initialiser visible from the
+   current module. Used to enforce DDR-003's chaining rule: a derived
+   initialiser must call a base initialiser via SUPER — but only when one
+   is actually reachable; an all-private base set leaves zero-init as the
+   only option and imposes no obligation. */
+BOOLEAN ORB_HasVisibleInits(TypePtr rec) {
+    TypePtr t = rec;
+    while (t != NULL) {
+        ObjectPtr m = t->meth;
+        BOOLEAN declares = false;
+        BOOLEAN visible = false;
+        while (m != NULL) {
+            if (m->initf) {
+                declares = true;
+                if (m->expo || t->mno <= 0) {
+                    visible = true;
+                }
+            }
+            m = m->next;
+        }
+        if (declares) {
+            return visible;
+        }
+        t = t->base;
+    }
+    return false;
+}
+
 /* True when the record (or an ancestor) declares an initialiser — in
    which case NEW is forbidden on pointers to it: allocation must go
    through a constructor so no uninitialised object escapes (DDR-003). */

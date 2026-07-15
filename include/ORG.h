@@ -64,6 +64,9 @@ void ORG_MethodItem(ORG_Item *x, ORB_Object *m, BOOLEAN direct);
 // instance and make x a callable item on the init body with the instance
 // as hidden receiver; the init body returns it at +1.
 void ORG_InitItem(ORG_Item *x, ORB_Object *m, ORB_Type *rec);
+// Release a discarded owned (+1) call result — e.g. a super-initialiser
+// call in statement position, whose returned receiver is not consumed.
+void ORG_Discard(ORG_Item *x);
 
 // Type operations
 void ORG_BuildTD(ORB_Type *T, LONGINT *dc);

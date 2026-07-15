@@ -930,6 +930,17 @@ void ORG_InitItem(ORG_Item *x, ORB_Object *m, ORB_Type *rec) {
     x->rdo = FALSE;
 }
 
+// Release a discarded owned (+1) call result. A super-initialiser call in
+// statement position returns the (already-held) receiver at +1; nothing
+// consumes it, so the statement must drop the reference itself.
+void ORG_Discard(ORG_Item *x) {
+    if (x && x->mode == Reg && x->b == 1 &&
+        type_is_managed(x->type) && x->backend) {
+        emit_release((LLVMValueRef)x->backend);
+        x->b = 0;
+    }
+}
+
 // --- Type metadata / type tests ---
 void ORG_BuildTD(ORB_Type *T, LONGINT *dc) { (void)T; (void)dc; }
 void ORG_TypeTest(ORG_Item *x, ORB_Type *T, BOOLEAN varpar, BOOLEAN isguard) {

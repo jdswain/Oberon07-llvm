@@ -248,6 +248,72 @@ static void ConstructorCall(ORG_Item *x) {
     x->rdo = FALSE;
 }
 
+/* Enclosing type-bound body, for SUPER (DDR-006). Saved/restored across
+   nested ProcedureDecl calls; a plain nested procedure clears them, since
+   Oberon-07 nested procedures cannot reach the enclosing receiver. */
+static ORB_Object *CurRcv = NULL;      /* receiver parameter object */
+static ORB_Type   *CurRcvRec = NULL;   /* record the body is bound to */
+static BOOLEAN     CurIsInit = FALSE;  /* body is an initialiser */
+static BOOLEAN     SuperInitCalled = FALSE; /* body contained SUPER.<init> */
+
+/* SUPER.Name — force static binding in the receiver type's IMMEDIATE base
+   (DDR-006): resolution starts at the base and proceeds upward exactly as
+   if the receiver were of the base type, so an intermediate override can
+   never be skipped. Inside an initialiser body the base type's
+   initialisers are searched first (SUPER.Create(...) runs the base init
+   body on the already-allocated receiver — no allocation); base methods
+   are reachable from both kinds of body. Builds x as a callable item and
+   returns the resolved member (NULL after an error). */
+static ORB_Object *SuperCall(ORG_Item *x) {
+    ORB_Object *m = NULL;
+    ORB_Type *base;
+
+    ORG_MakeConstItem(x, intType, 0);   /* sane item for error recovery */
+    ORS_Get(&sym);
+    Check(ORS_period, "no .");
+    if (sym != ORS_ident) {
+        ORS_Mark("ident?");
+        return NULL;
+    }
+    if ((CurRcv == NULL) || (CurRcvRec == NULL)) {
+        ORS_Mark("SUPER only inside a type-bound procedure");
+        ORS_Get(&sym);
+        return NULL;
+    }
+    base = CurRcvRec->base;
+    if (base == NULL) {
+        ORS_Mark("receiver type has no base type");
+        ORS_Get(&sym);
+        return NULL;
+    }
+    if (CurIsInit) {
+        m = thisinit(base);
+    }
+    if (m == NULL) {
+        m = thismethod(base);
+    }
+    ORS_Get(&sym);
+    if (m == NULL) {
+        ORS_Mark("undef in base type");
+        return NULL;
+    }
+    if (m->initf) {
+        SuperInitCalled = TRUE;
+    }
+
+    /* receiver argument: the record's address — load through a pointer
+       receiver, take the VAR-record parameter directly */
+    ORG_MakeItem(x, CurRcv, level);
+    if (CurRcv->type->form == ORB_Pointer) {
+        ORG_DeRef(x);
+        x->type = CurRcv->type->base;
+    }
+    ORG_MethodItem(x, m, TRUE);   /* TRUE: SUPER is a binding construct */
+    x->type = m->type;
+    x->rdo = FALSE;
+    return m;
+}
+
 static void selector(ORG_Item *x) {
     ORG_Item y;
     ORB_Object *obj;
@@ -651,15 +717,32 @@ static void factor(ORG_Item *x) {
     ORB_Object *obj;
     LONGINT rx;
     
-    // sync
-    if ((sym < ORS_char) || (sym > ORS_ident)) {
+    // sync (ORS_super sits above the token range; test it explicitly)
+    if (((sym < ORS_char) || (sym > ORS_ident)) && (sym != ORS_super)) {
         ORS_Mark("expression expected");
         do {
             ORS_Get(&sym);
         } while (((sym < ORS_char) || (sym > ORS_for)) && (sym < ORS_then));
     }
-    
-    if (sym == ORS_ident) {
+
+    if (sym == ORS_super) {
+        /* SUPER.M(...) as a function call (DDR-006) */
+        SuperCall(x);
+        if (sym == ORS_lparen) {
+            ORS_Get(&sym);
+            if ((x->type->form == ORB_Proc) && (x->type->base->form != ORB_NoTyp)) {
+                ORG_PrepCall(x, &rx);
+                ParamList(x);
+                ORG_Call(x, rx);
+                x->type = x->type->base;
+            } else {
+                ORS_Mark("not a function");
+                ParamList(x);
+            }
+        } else {
+            ORS_Mark("no (");
+        }
+    } else if (sym == ORS_ident) {
         qualident(&obj);
         if (obj->class == ORB_SFunc) {
             StandFunc(x, obj->val, obj->type);
@@ -1156,6 +1239,38 @@ static void StatSequence(void) {
                 } else {
                     ORS_Mark("not a procedure");
                 }
+            }
+        } else if (sym == ORS_super) {
+            /* SUPER.M(...) / SUPER.Create(...) as a statement (DDR-006).
+               A super-initialiser returns the receiver at +1; nothing
+               consumes it here, so the statement drops the reference. */
+            ORB_Object *sm = SuperCall(&x);
+            BOOLEAN callable = (x.type->form == ORB_Proc) &&
+                ((x.type->base->form == ORB_NoTyp) || ((sm != NULL) && sm->initf));
+            if (sym == ORS_lparen) {
+                ORS_Get(&sym);
+                if (callable) {
+                    ORG_PrepCall(&x, &rx);
+                    ParamList(&x);
+                    ORG_Call(&x, rx);
+                    x.type = x.type->base;
+                    ORG_Discard(&x);
+                } else {
+                    ORS_Mark("not a procedure");
+                    if (x.type->form == ORB_Proc) {
+                        ParamList(&x);
+                    }
+                }
+            } else if (callable) {
+                if (x.type->nofpar - (x.type->mthd ? 1 : 0) > 0) {
+                    ORS_Mark("missing parameters");
+                }
+                ORG_PrepCall(&x, &rx);
+                ORG_Call(&x, rx);
+                x.type = x.type->base;
+                ORG_Discard(&x);
+            } else {
+                ORS_Mark("not a procedure");
             }
         } else if (sym == ORS_if) {
             ORS_Get(&sym);
@@ -2107,11 +2222,15 @@ static void ProcedureDecl(void) {
     ORG_Item x;
     LONGINT locblksize, parblksize, L;
     BOOLEAN int_proc;
-    /* type-bound procedure state (DDR-001..004/007) */
+    /* type-bound procedure state (DDR-001..004/006/007) */
     BOOLEAN has_rcv, is_override, is_init;
     INTEGER rcvcl;
     ORS_Ident rcvname, rtypname;
     ORB_Type *rcvtyp, *rec;
+    /* SUPER context of the enclosing body, restored on exit (nesting) */
+    ORB_Object *savedRcv;
+    ORB_Type *savedRec;
+    BOOLEAN savedIsInit, savedSuperInit;
 
     int_proc = FALSE;
     has_rcv = FALSE;
@@ -2238,6 +2357,17 @@ static void ProcedureDecl(void) {
         OpenScope();
         level++;
         type->base = noType;
+        /* SUPER context: this body's receiver — cleared for plain
+           procedures, including ones nested inside a method (Oberon-07
+           nested procedures cannot reach the enclosing receiver) */
+        savedRcv = CurRcv;
+        savedRec = CurRcvRec;
+        savedIsInit = CurIsInit;
+        savedSuperInit = SuperInitCalled;
+        CurRcv = NULL;
+        CurRcvRec = NULL;
+        CurIsInit = FALSE;
+        SuperInitCalled = FALSE;
         if (has_rcv) {
             /* the receiver is the hidden first parameter */
             ORB_Object *rp;
@@ -2248,6 +2378,11 @@ static void ProcedureDecl(void) {
             rp->rdo = FALSE;
             rp->val = 1;
             parblksize = parblksize + ((rcvcl == ORB_Par) ? 2 * WordSize : WordSize);
+            if (rec != NULL) {
+                CurRcv = rp;
+                CurRcvRec = rec;
+                CurIsInit = is_init;
+            }
         }
         ProcedureType(type, &parblksize);
         if (has_rcv) {
@@ -2354,6 +2489,17 @@ static void ProcedureDecl(void) {
         } else {
             ORS_Mark("no proc id");
         }
+        /* DDR-003: a derived initialiser is responsible for an explicit
+           base-initialiser call — enforced whenever the base type's
+           constructor set has a member visible from here */
+        if (is_init && (rec != NULL) && (rec->base != NULL) &&
+            ORB_HasVisibleInits(rec->base) && !SuperInitCalled) {
+            ORS_Mark("initialiser must call a base initialiser via SUPER");
+        }
+        CurRcv = savedRcv;
+        CurRcvRec = savedRec;
+        CurIsInit = savedIsInit;
+        SuperInitCalled = savedSuperInit;
     } else {
         ORS_Mark("proc id expected");
     }
