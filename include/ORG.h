@@ -68,6 +68,17 @@ void ORG_InitItem(ORG_Item *x, ORB_Object *m, ORB_Type *rec);
 // call in statement position, whose returned receiver is not consumed.
 void ORG_Discard(ORG_Item *x);
 
+// Interfaces (DDR-008): fat-pointer values { data, itable }.
+// Convert a pointer (or NIL) item to an interface value of type ift.
+void ORG_PtrToIface(ORG_Item *x, ORB_Type *ift);
+// Turn designator `i.m` (i of interface type) into a callable item:
+// data -> tag -> vtable[itab[m->val]].
+void ORG_IfaceMethodItem(ORG_Item *x, ORB_Object *m);
+// Store an interface value (already converted) into an interface variable.
+void ORG_StoreIface(ORG_Item *x, ORG_Item *y);
+// = / # between interface values, or an interface value and NIL.
+void ORG_IfaceRelation(INTEGER op, ORG_Item *x, ORG_Item *y);
+
 // Type operations
 void ORG_BuildTD(ORB_Type *T, LONGINT *dc);
 void ORG_TypeTest(ORG_Item *x, ORB_Type *T, BOOLEAN varpar, BOOLEAN isguard);

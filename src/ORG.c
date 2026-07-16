@@ -53,6 +53,10 @@ static char           ModName[128];
 // Cached basic types
 static LLVMTypeRef Ty_i1, Ty_i8, Ty_i32, Ty_i64, Ty_float, Ty_void, Ty_ptr;
 
+// Interface fat pointer: { ptr data, ptr itable } (DDR-008 §6, LLVM
+// backend choice). The itable is [n x i32] of vtable slot indices.
+static LLVMTypeRef Ty_Iface;
+
 // Type descriptor prefix. Every record's TD begins with this struct; the
 // vtable ([nofmeth x ptr]) and the ptr_offsets array (variable length,
 // -1-terminated) follow it, in that order. The prefix is used by the
@@ -112,10 +116,13 @@ typedef struct {
 static Label  Labels[MAX_LABELS];
 static int    LabelCount;     // index 0 reserved as "no label"
 
-// Pending-call argument stacks
+// Pending-call argument stacks. CallArgRef holds the strong reference of
+// an owned argument (equal to the arg for pointers, the extracted data
+// word for interface fat values) so the post-call release is uniform.
 #define MAX_CALL_DEPTH 32
 #define MAX_CALL_ARGS  32
 static LLVMValueRef CallArgs[MAX_CALL_DEPTH][MAX_CALL_ARGS];
+static LLVMValueRef CallArgRef[MAX_CALL_DEPTH][MAX_CALL_ARGS];
 static BOOLEAN      CallArgOwned[MAX_CALL_DEPTH][MAX_CALL_ARGS];
 static int          CallArgC[MAX_CALL_DEPTH];
 static int          CallTop;
@@ -144,6 +151,7 @@ typedef struct {
     int32_t      len;
     LLVMValueRef elem_td;     // NULL for ARRAY OF POINTER, TD for ARRAY OF RECORD
     int32_t      elem_size;   // bytes per element
+    BOOLEAN      elem_iface;  // ARRAY OF interface: release data words, stride 16
 } LocalArrInfo;
 static LocalArrInfo LocalArrs[MAX_LOCAL_ARRS];
 static int          NumLocalArrs;
@@ -252,6 +260,7 @@ static LLVMTypeRef LlvmType(ORB_Type *t) {
         case ORB_Set:    ty = Ty_i32;   break;
         case ORB_NilTyp: ty = Ty_ptr;   break;
         case ORB_Pointer:ty = Ty_ptr;   break;
+        case ORB_Intfc:  ty = Ty_Iface; break;
         case ORB_Proc:   ty = Ty_ptr;   break;
         case ORB_NoTyp:  ty = Ty_void;  break;
         case ORB_String: ty = Ty_ptr;   break;
@@ -382,6 +391,11 @@ static void record_ptr_offsets(ORB_Type *t, int32_t base_off,
             // freed (that's what makes them cycle-breakers).
             if (f->type->form == ORB_Pointer && !f->type->weak && *count < max) {
                 out[(*count)++] = total_off;
+            } else if (f->type->form == ORB_Intfc && *count < max) {
+                // interface field: the data word (offset 0 of the fat
+                // value) is the strong reference; the itable word is not
+                // refcounted
+                out[(*count)++] = total_off;
             } else if (f->type->form == ORB_Record) {
                 record_ptr_offsets(f->type, total_off, out, count, max);
             } else if (f->type->form == ORB_Array && f->type->len > 0) {
@@ -393,6 +407,8 @@ static void record_ptr_offsets(ORB_Type *t, int32_t base_off,
                 for (int32_t k = 0; k < f->type->len && *count < max; k++) {
                     int32_t e_off = total_off + (int32_t)(k * elt_sz);
                     if (elt && elt->form == ORB_Pointer && !elt->weak) {
+                        out[(*count)++] = e_off;
+                    } else if (elt && elt->form == ORB_Intfc) {
                         out[(*count)++] = e_off;
                     } else if (elt && elt->form == ORB_Record) {
                         record_ptr_offsets(elt, e_off, out, count, max);
@@ -596,13 +612,28 @@ static BOOLEAN type_is_managed(ORB_Type *t) {
     return t && t->form == ORB_Pointer && !t->weak;
 }
 
+// True iff a value of this type carries a strong reference: a managed
+// pointer, or an interface fat value (whose data word is the reference).
+static BOOLEAN type_holds_ref(ORB_Type *t) {
+    return type_is_managed(t) || (t && t->form == ORB_Intfc);
+}
+
+// The strong reference inside a loaded VALUE of a ref-holding type:
+// the pointer itself, or the fat value's data word.
+static LLVMValueRef ref_of(LLVMValueRef v, ORB_Type *t) {
+    if (t && t->form == ORB_Intfc) {
+        return LLVMBuildExtractValue(Bld, v, 0, "ifdata");
+    }
+    return v;
+}
+
 // Release the +1 reference an Item carries when its function-call origin
 // is being consumed in a non-store context (relation, type test, parameter
 // pass). After the release the item's `b` flag is cleared so the same
 // reference isn't dropped twice if the value flows further.
 static void consume_arc(ORG_Item *x, LLVMValueRef val) {
-    if (x && x->mode == Reg && x->b == 1 && type_is_managed(x->type)) {
-        emit_release(val);
+    if (x && x->mode == Reg && x->b == 1 && type_holds_ref(x->type)) {
+        emit_release(ref_of(val, x->type));
         x->b = 0;
     }
 }
@@ -935,10 +966,153 @@ void ORG_InitItem(ORG_Item *x, ORB_Object *m, ORB_Type *rec) {
 // consumes it, so the statement must drop the reference itself.
 void ORG_Discard(ORG_Item *x) {
     if (x && x->mode == Reg && x->b == 1 &&
-        type_is_managed(x->type) && x->backend) {
-        emit_release((LLVMValueRef)x->backend);
+        type_holds_ref(x->type) && x->backend) {
+        emit_release(ref_of((LLVMValueRef)x->backend, x->type));
         x->b = 0;
     }
+}
+
+// --- Interfaces (DDR-008) ---
+//
+// An interface value is a fat pointer { data, itable }. The itable is a
+// per-(record, interface) constant [n x i32] of VTABLE SLOT INDICES, not
+// function pointers: because overrides keep their slots (DDR-001), one
+// table built against the static record type stays correct for every
+// extension whose object later hides behind the interface. Conversion is
+// therefore a pure compile-time constant, and dispatch is
+//     data -> tag -> vtable[itab[k]].
+// Itables carry no identity (they are only ever indexed), so each module
+// emits its own internal copies on demand.
+static LLVMValueRef itable_global(ORB_Type *rec, ORB_Type *ifc) {
+    char name[320];
+    const char *rn = (rec->typobj && rec->typobj->name[0]) ? rec->typobj->name : "anon";
+    const char *in = (ifc->typobj && ifc->typobj->name[0]) ? ifc->typobj->name : "anon";
+    snprintf(name, sizeof(name), "%s__%s__%s__%s__itab",
+             module_name_of_type(rec), rn, module_name_of_type(ifc), in);
+    LLVMValueRef g = LLVMGetNamedGlobal(Mod, name);
+    if (g) return g;
+
+    int n = ifc->nofmeth;
+    if (n < 0) n = 0;
+    if (n > MAX_VTBL_SLOTS) n = MAX_VTBL_SLOTS;
+    LLVMValueRef slots[MAX_VTBL_SLOTS];
+    for (int k = 0; k < n; k++) slots[k] = LLVMConstInt(Ty_i32, 0, 0);
+    for (ObjectPtr m = ifc->meth; m; m = m->next) {
+        if (m->val < 0 || m->val >= n) continue;
+        ObjectPtr rm = ORB_FindMeth(rec, m->name);
+        if (rm) {
+            slots[m->val] = LLVMConstInt(Ty_i32, (uint64_t)rm->val, 0);
+        }
+        // missing method: conformance checking already reported it; the
+        // zero entry keeps the constant well-formed for error recovery
+    }
+    LLVMTypeRef at = LLVMArrayType2(Ty_i32, (unsigned)n);
+    g = LLVMAddGlobal(Mod, at, name);
+    LLVMSetLinkage(g, LLVMInternalLinkage);
+    LLVMSetGlobalConstant(g, 1);
+    LLVMSetInitializer(g, LLVMConstArray2(Ty_i32, slots, (uint64_t)n));
+    return g;
+}
+
+// Convert a pointer (or NIL) item into an interface value of type ift.
+// Ownership transfers: a +1-owned pointer becomes a +1-owned fat value.
+void ORG_PtrToIface(ORG_Item *x, ORB_Type *ift) {
+    if (!x->type || x->type->form != ORB_Pointer || !x->type->base) {
+        // NIL (or error recovery): the null fat value
+        x->mode = Reg;
+        x->backend = LLVMConstNull(Ty_Iface);
+        x->backend2 = NULL;
+        x->b = 0;
+        x->type = ift;
+        return;
+    }
+    LLVMValueRef p = LoadItem(x);
+    BOOLEAN owned = (x->mode == Reg && x->b == 1);
+    LLVMValueRef itab = itable_global(x->type->base, ift);
+    LLVMValueRef fat = LLVMBuildInsertValue(Bld,
+        LLVMBuildInsertValue(Bld, LLVMGetUndef(Ty_Iface), p, 0, "ifd"),
+        itab, 1, "ifv");
+    x->mode = Reg;
+    x->backend = fat;
+    x->backend2 = NULL;
+    x->b = owned ? 1 : 0;
+    x->type = ift;
+    x->rdo = FALSE;
+}
+
+// Designator `i.m` for i of interface type: resolve the callable.
+void ORG_IfaceMethodItem(ORG_Item *x, ORB_Object *m) {
+    LLVMValueRef data, itab;
+    if (x->mode == Reg && x->backend) {
+        LLVMValueRef fat = (LLVMValueRef)x->backend;
+        data = LLVMBuildExtractValue(Bld, fat, 0, "ifdata");
+        itab = LLVMBuildExtractValue(Bld, fat, 1, "ifitab");
+    } else if (x->backend) {
+        LLVMValueRef addr = (LLVMValueRef)x->backend;
+        data = LLVMBuildLoad2(Bld, Ty_ptr, addr, "ifdata");
+        LLVMValueRef itslot = LLVMBuildStructGEP2(Bld, Ty_Iface, addr, 1, "iftab_slot");
+        itab = LLVMBuildLoad2(Bld, Ty_ptr, itslot, "ifitab");
+    } else {
+        ORS_Mark("internal: interface designator has no backend");
+        x->mode = ORB_Const;
+        x->backend = NULL;
+        x->backend2 = NULL;
+        return;
+    }
+    // slot = itab[m->val]; fn = data->tag.vtable[slot]
+    LLVMValueRef idx = LLVMConstInt(Ty_i32, (uint64_t)m->val, 0);
+    LLVMValueRef slotp = LLVMBuildGEP2(Bld, Ty_i32, itab, &idx, 1, "islotp");
+    LLVMValueRef slot = LLVMBuildLoad2(Bld, Ty_i32, slotp, "islot");
+    LLVMValueRef tag = LLVMBuildLoad2(Bld, Ty_ptr, data, "tag");
+    LLVMValueRef indices[3] = {
+        LLVMConstInt(Ty_i32, 0, 0),
+        LLVMConstInt(Ty_i32, 4, 0),   // vtable member of Ty_TDDispatch
+        slot
+    };
+    LLVMValueRef fnp = LLVMBuildGEP2(Bld, Ty_TDDispatch, tag, indices, 3, "vslot");
+    LLVMValueRef fn = LLVMBuildLoad2(Bld, Ty_ptr, fnp, "vfn");
+    x->mode = Reg;
+    x->backend = fn;
+    x->backend2 = data;   // hidden receiver for ORG_PrepCall
+    x->a = 0;
+    x->b = 0;
+    x->r = 0;
+    x->rdo = FALSE;
+}
+
+// interface-var := interface-value. The parser converted pointers/NIL to
+// fat values first, so y is an interface item (variable, param, field, or
+// Reg value). Retain the incoming data word (unless ownership transfers),
+// release the displaced one, store the whole fat value.
+void ORG_StoreIface(ORG_Item *x, ORG_Item *y) {
+    EmittedStmts++;
+    LLVMValueRef addr = LValueItem(x);
+    LLVMValueRef fat = LoadItem(y);
+    if (!addr || !fat) return;
+    BOOLEAN owned = (y->mode == Reg && y->b == 1);
+    LLVMValueRef newdata = LLVMBuildExtractValue(Bld, fat, 0, "ifdata");
+    if (!owned) emit_retain(newdata);
+    LLVMValueRef old = LLVMBuildLoad2(Bld, Ty_ptr, addr, "old");
+    emit_release(old);
+    LLVMBuildStore(Bld, fat, addr);
+}
+
+// = / # where at least one side is an interface value (the other side is
+// the same interface type or NIL): compare data words.
+void ORG_IfaceRelation(INTEGER op, ORG_Item *x, ORG_Item *y) {
+    LLVMValueRef a = LoadItem(x);
+    LLVMValueRef b = LoadItem(y);
+    LLVMValueRef ap = (x->type && x->type->form == ORB_Intfc)
+        ? LLVMBuildExtractValue(Bld, a, 0, "ifd") : a;
+    LLVMValueRef bp = (y->type && y->type->form == ORB_Intfc)
+        ? LLVMBuildExtractValue(Bld, b, 0, "ifd") : b;
+    consume_arc(x, a);
+    consume_arc(y, b);
+    LLVMIntPredicate pred = (op == ORS_eql) ? LLVMIntEQ : LLVMIntNE;
+    x->mode = Cond;
+    x->type = boolType;
+    x->backend = LLVMBuildICmp(Bld, pred, ap, bp, "ifrel");
+    x->b = 0;
 }
 
 // --- Type metadata / type tests ---
@@ -963,6 +1137,15 @@ void ORG_TypeTest(ORG_Item *x, ORB_Type *T, BOOLEAN varpar, BOOLEAN isguard) {
     if (x->type && x->type->form == ORB_Pointer) {
         rec_ptr = LLVMBuildLoad2(Bld, Ty_ptr, LValueItem(x), "rec");
         rec_type = x->type->base;
+    } else if (x->type && x->type->form == ORB_Intfc) {
+        // Interface narrowing (DDR-008 §5.4): the fat value's data word is
+        // its FIRST word, so loading through the designator address reads
+        // the record pointer — and, for guards, the untouched address
+        // continues to act as a pointer-variable L-value downstream.
+        rec_ptr = (x->mode == Reg && x->backend)
+            ? LLVMBuildExtractValue(Bld, (LLVMValueRef)x->backend, 0, "ifdata")
+            : LLVMBuildLoad2(Bld, Ty_ptr, LValueItem(x), "rec");
+        rec_type = (T && T->form == ORB_Pointer) ? T->base : T;
     } else {
         rec_ptr = (LLVMValueRef)x->backend;
         rec_type = x->type;
@@ -1428,8 +1611,9 @@ void ORG_ValueParam(ORG_Item *x) {
     // If the argument is a +1-owned function-call result, the caller still
     // owns one reference. The callee will retain on entry (taking its own),
     // so after the call returns we need to release this leftover ref.
-    CallArgOwned[CallTop][slot] =
-        (x->mode == Reg && x->b == 1 && type_is_managed(x->type));
+    BOOLEAN owned = (x->mode == Reg && x->b == 1 && type_holds_ref(x->type));
+    CallArgOwned[CallTop][slot] = owned;
+    CallArgRef[CallTop][slot] = owned ? ref_of(v, x->type) : NULL;
     CallArgC[CallTop]++;
 }
 void ORG_StringParam(ORG_Item *x) {
@@ -1712,20 +1896,24 @@ void ORG_Call(ORG_Item *x, LONGINT r) {
         fn = LoadItem(x);
     }
     BOOLEAN has_result = x->type->base && x->type->base->form != ORB_NoTyp;
-    // Mark only strong-pointer results as +1-owned. WEAK returns aren't
-    // retained by the callee, so the caller has no reference to release.
-    BOOLEAN ptr_result = has_result && type_is_managed(x->type->base);
+    // Mark only strong-reference results (+1-owned): managed pointers and
+    // interface values. WEAK returns aren't retained by the callee, so the
+    // caller has no reference to release.
+    BOOLEAN ptr_result = has_result && type_holds_ref(x->type->base);
     LLVMValueRef result = LLVMBuildCall2(Bld, ft, fn,
         CallArgs[(int)r], CallArgC[(int)r],
         has_result ? "call" : "");
 
     // Release the leftover +1 references from owned arguments. Callee
     // already retained on entry and released on exit, so this purely
-    // balances out the caller's own +1.
+    // balances out the caller's own +1. CallArgRef holds the extracted
+    // reference (the data word for interface fat values).
     for (int i = 0; i < CallArgC[(int)r]; i++) {
         if (CallArgOwned[(int)r][i]) {
-            emit_release(CallArgs[(int)r][i]);
+            emit_release(CallArgRef[(int)r][i] ? CallArgRef[(int)r][i]
+                                               : CallArgs[(int)r][i]);
             CallArgOwned[(int)r][i] = FALSE;
+            CallArgRef[(int)r][i] = NULL;
         }
     }
     // Do NOT mutate x->type here — the parser sets x->type = x->type->base
@@ -1800,6 +1988,17 @@ void ORG_Enter(ORB_Object *proc, ORB_Object *params, LONGINT parblksize, LONGINT
                     LocalPtrSlots[NumLocalPtrs++] = slot;
                 }
             }
+            // ARC: interface value param — retain the fat value's data
+            // word. The slot's first word IS the data word, so the normal
+            // LocalPtrSlots release (which loads the first word) works.
+            else if (p->class == ORB_Var && p->type &&
+                     p->type->form == ORB_Intfc) {
+                LLVMValueRef d = LLVMBuildExtractValue(Bld, arg, 0, "ifdata");
+                emit_retain(d);
+                if (NumLocalPtrs < MAX_LOCAL_PTRS) {
+                    LocalPtrSlots[NumLocalPtrs++] = slot;
+                }
+            }
         }
         idx++; p = p->next;
     }
@@ -1814,6 +2013,14 @@ void ORG_Enter(ORB_Object *proc, ORB_Object *params, LONGINT parblksize, LONGINT
             // release-of-old is a safe no-op. They get released on exit.
             if (type_is_managed(p->type)) {
                 LLVMBuildStore(Bld, LLVMConstNull(Ty_ptr), slot);
+                if (NumLocalPtrs < MAX_LOCAL_PTRS) {
+                    LocalPtrSlots[NumLocalPtrs++] = slot;
+                }
+            }
+            // ARC: interface locals — zero the whole fat value; the exit
+            // release loads the first word (the data reference).
+            else if (p->type && p->type->form == ORB_Intfc) {
+                LLVMBuildStore(Bld, LLVMConstNull(ty), slot);
                 if (NumLocalPtrs < MAX_LOCAL_PTRS) {
                     LocalPtrSlots[NumLocalPtrs++] = slot;
                 }
@@ -1844,19 +2051,21 @@ void ORG_Enter(ORB_Object *proc, ORB_Object *params, LONGINT parblksize, LONGINT
             else if (p->type && p->type->form == ORB_Array && p->type->len > 0) {
                 ORB_Type *elt = p->type->base;
                 BOOLEAN ptr_array = elt && elt->form == ORB_Pointer && !elt->weak;
+                BOOLEAN if_array  = elt && elt->form == ORB_Intfc;
                 BOOLEAN rec_array = elt && elt->form == ORB_Record &&
                                     record_has_ptr_fields(elt);
-                if ((ptr_array || rec_array) && NumLocalArrs < MAX_LOCAL_ARRS) {
+                if ((ptr_array || if_array || rec_array) && NumLocalArrs < MAX_LOCAL_ARRS) {
                     LLVMValueRef sz = LLVMSizeOf(ty);
                     LLVMBuildMemSet(Bld, slot, LLVMConstInt(Ty_i8, 0, 0), sz, 0);
                     LocalArrs[NumLocalArrs].slot = slot;
                     LocalArrs[NumLocalArrs].len  = p->type->len;
+                    LocalArrs[NumLocalArrs].elem_iface = if_array;
                     if (rec_array) {
                         LocalArrs[NumLocalArrs].elem_td   = record_td(elt);
                         LocalArrs[NumLocalArrs].elem_size = elt->size;
                     } else {
                         LocalArrs[NumLocalArrs].elem_td   = NULL;
-                        LocalArrs[NumLocalArrs].elem_size = 0;
+                        LocalArrs[NumLocalArrs].elem_size = if_array ? 16 : 0;
                     }
                     NumLocalArrs++;
                 }
@@ -1872,7 +2081,8 @@ void ORG_Enter(ORB_Object *proc, ORB_Object *params, LONGINT parblksize, LONGINT
 void ORG_Return(ORB_Object *proc, ORG_Item *x) {
     BOOLEAN returns_value = proc->type->base && proc->type->base->form != ORB_NoTyp;
     // WEAK returns aren't retained — callers don't release them.
-    BOOLEAN returns_ptr   = returns_value && type_is_managed(proc->type->base);
+    // Interface results retain their data word.
+    BOOLEAN returns_ptr   = returns_value && type_holds_ref(proc->type->base);
     LLVMValueRef rv = NULL;
 
     if (returns_value) {
@@ -1895,7 +2105,7 @@ void ORG_Return(ORB_Object *proc, ORG_Item *x) {
         // also retain (yielding +2) which the caller's later release
         // balances. LLVM's optimizer can fold the redundant pair when it
         // sees through the calls.
-        if (returns_ptr) emit_retain(rv);
+        if (returns_ptr) emit_retain(ref_of(rv, proc->type->base));
     }
 
     // Release every tracked pointer local / value pointer param.
@@ -1920,7 +2130,20 @@ void ORG_Return(ORB_Object *proc, ORG_Item *x) {
 
     // Stack arrays of managed elements.
     for (int i = 0; i < NumLocalArrs; i++) {
-        if (LocalArrs[i].elem_td) {
+        if (LocalArrs[i].elem_iface) {
+            // ARRAY OF interface → release each element's data word,
+            // striding over the 16-byte fat values
+            LLVMTypeRef pt[3] = { Ty_ptr, Ty_i64, Ty_i64 };
+            LLVMTypeRef ft = LLVMFunctionType(Ty_void, pt, 3, 0);
+            LLVMValueRef fn = LLVMGetNamedFunction(Mod, "oc_release_strided");
+            if (!fn) fn = LLVMAddFunction(Mod, "oc_release_strided", ft);
+            LLVMValueRef args[3] = {
+                LocalArrs[i].slot,
+                LLVMConstInt(Ty_i64, (uint64_t)LocalArrs[i].len, 0),
+                LLVMConstInt(Ty_i64, (uint64_t)LocalArrs[i].elem_size, 0),
+            };
+            LLVMBuildCall2(Bld, ft, fn, args, 3, "");
+        } else if (LocalArrs[i].elem_td) {
             // ARRAY OF record-with-ptr-fields → oc_release_array_fields
             LLVMTypeRef pt[4] = { Ty_ptr, Ty_i64, Ty_i64, Ty_ptr };
             LLVMTypeRef ft = LLVMFunctionType(Ty_void, pt, 4, 0);
@@ -2231,6 +2454,10 @@ void ORG_Open(const char *modid, INTEGER v) {
         Ty_float= LLVMFloatTypeInContext(Ctx);
         Ty_void = LLVMVoidTypeInContext(Ctx);
         Ty_ptr  = LLVMPointerTypeInContext(Ctx, 0);
+        {
+            LLVMTypeRef if_fields[2] = { Ty_ptr, Ty_ptr };  // { data, itable }
+            Ty_Iface = LLVMStructTypeInContext(Ctx, if_fields, 2, 0);
+        }
 
         {
             LLVMTypeRef td_fields[] = {

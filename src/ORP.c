@@ -160,9 +160,23 @@ static BOOLEAN IsExtension(ORB_Type *t0, ORB_Type *t1) {
 
 static void TypeTest(ORG_Item *x, ORB_Type *T, BOOLEAN guard) {
     ORB_Type *xt = x->type;
-    
-    if ((T->form == xt->form) && 
-        ((T->form == ORB_Pointer) || 
+
+    if ((xt->form == ORB_Intfc) && (T->form == ORB_Pointer) &&
+        (T->base != NULL) && (T->base->form == ORB_Record)) {
+        /* narrowing an interface reference to a concrete type (DDR-008
+           §5.4): the ordinary tag test — no new machinery. Any pointer-to-
+           record target is admissible; only the dynamic type decides. */
+        ORG_TypeTest(x, T, FALSE, guard);
+        if (guard) {
+            x->type = T;
+        } else {
+            x->type = boolType;
+        }
+        return;
+    }
+
+    if ((T->form == xt->form) &&
+        ((T->form == ORB_Pointer) ||
          ((T->form == ORB_Record) && (x->mode == ORB_Par)))) {
         
         while ((xt != T) && (xt != NULL)) {
@@ -319,8 +333,9 @@ static void selector(ORG_Item *x) {
     ORB_Object *obj;
 
     while ((sym == ORS_lbrak) || (sym == ORS_period) || (sym == ORS_arrow) ||
-           ((sym == ORS_lparen) && 
-            ((x->type->form == ORB_Record) || (x->type->form == ORB_Pointer)))) {
+           ((sym == ORS_lparen) &&
+            ((x->type->form == ORB_Record) || (x->type->form == ORB_Pointer) ||
+             (x->type->form == ORB_Intfc)))) {
         
         if (sym == ORS_lbrak) {
             do {
@@ -343,6 +358,23 @@ static void selector(ORG_Item *x) {
                 if (x->mode == ORB_Typ) {
                     /* type-qualified member: constructor call (DDR-004/005) */
                     ConstructorCall(x);
+                    continue;
+                }
+                if (x->type->form == ORB_Intfc) {
+                    /* interface dispatch (DDR-008 §5.4): indexed indirect
+                       call through the fat value's itable — no check */
+                    obj = x->type->meth;
+                    while ((obj != NULL) && (strcmp(obj->name, ORS_id) != 0)) {
+                        obj = obj->next;
+                    }
+                    ORS_Get(&sym);
+                    if (obj != NULL) {
+                        ORG_IfaceMethodItem(x, obj);
+                        x->type = obj->type;
+                        x->rdo = FALSE;
+                    } else {
+                        ORS_Mark("undef");
+                    }
                     continue;
                 }
                 if (x->type->form == ORB_Pointer) {
@@ -399,8 +431,9 @@ static void selector(ORG_Item *x) {
                 ORS_Mark("not a pointer");
             }
             
-        } else if ((sym == ORS_lparen) && 
-                   ((x->type->form == ORB_Record) || (x->type->form == ORB_Pointer))) {
+        } else if ((sym == ORS_lparen) &&
+                   ((x->type->form == ORB_Record) || (x->type->form == ORB_Pointer) ||
+                    (x->type->form == ORB_Intfc))) {
             ORS_Get(&sym);
             if (sym == ORS_ident) {
                 qualident(&obj);
@@ -483,16 +516,22 @@ static BOOLEAN MethodSigMatch(ORB_Type *t0, ORB_Type *t1) {
 
 static BOOLEAN CompTypes(ORB_Type *t0, ORB_Type *t1, BOOLEAN varpar) {
     return (t0 == t1) ||
-           ((t0->form == ORB_Array) && (t1->form == ORB_Array) && 
+           ((t0->form == ORB_Array) && (t1->form == ORB_Array) &&
             (t0->base == t1->base) && (t0->len == t1->len)) ||
-           ((t0->form == ORB_Record) && (t1->form == ORB_Record) && 
+           ((t0->form == ORB_Record) && (t1->form == ORB_Record) &&
             IsExtension(t0, t1)) ||
            (!varpar &&
-            (((t0->form == ORB_Pointer) && (t1->form == ORB_Pointer) && 
+            (((t0->form == ORB_Pointer) && (t1->form == ORB_Pointer) &&
               IsExtension(t0->base, t1->base)) ||
-             ((t0->form == ORB_Proc) && (t1->form == ORB_Proc) && 
+             ((t0->form == ORB_Proc) && (t1->form == ORB_Proc) &&
               EqualSignatures(t0, t1)) ||
-             (((t0->form == ORB_Pointer) || (t0->form == ORB_Proc)) && 
+             /* upcast to an interface (DDR-008 §5.4): statically safe when
+                conformance is declared on the record or an ancestor */
+             ((t0->form == ORB_Intfc) && (t1->form == ORB_Pointer) &&
+              (t1->base != NULL) && (t1->base->form == ORB_Record) &&
+              ORB_Conforms(t1->base, t0)) ||
+             (((t0->form == ORB_Pointer) || (t0->form == ORB_Proc) ||
+               (t0->form == ORB_Intfc)) &&
               (t1->form == ORB_NilTyp))));
 }
 
@@ -509,6 +548,9 @@ static void Parameter(ORB_Object *par) {
         varpar = (par->class == ORB_Par);
         if (CompTypes(par->type, x.type, varpar)) {
             if (!varpar) {
+                if ((par->type->form == ORB_Intfc) && (x.type->form != ORB_Intfc)) {
+                    ORG_PtrToIface(&x, par->type);   /* pointer or NIL actual */
+                }
                 ORG_ValueParam(&x);
             } else {
                 if (!par->rdo) {
@@ -922,18 +964,31 @@ static void expression0(ORG_Item *x) {
                 ORG_IntRelation(rel, x, &y);
             } else if (xf == ORB_Real) {
                 ORG_RealRelation(rel, x, &y);
-            } else if ((xf == ORB_Set) || (xf == ORB_Pointer) || (xf == ORB_Proc) || 
+            } else if ((xf == ORB_Set) || (xf == ORB_Pointer) || (xf == ORB_Proc) ||
                        (xf == ORB_NilTyp) || (xf == ORB_Bool)) {
                 if (rel <= ORS_neq) {
                     ORG_IntRelation(rel, x, &y);
                 } else {
                     ORS_Mark("only = or #");
                 }
-            } else if (((xf == ORB_Array) && (x->type->base->form == ORB_Char)) || 
+            } else if (xf == ORB_Intfc) {
+                if (rel <= ORS_neq) {
+                    ORG_IfaceRelation(rel, x, &y);
+                } else {
+                    ORS_Mark("only = or #");
+                }
+            } else if (((xf == ORB_Array) && (x->type->base->form == ORB_Char)) ||
                        (xf == ORB_String)) {
                 ORG_StringRelation(rel, x, &y);
             } else {
                 ORS_Mark("illegal comparison");
+            }
+        } else if (((xf == ORB_Intfc) && (yf == ORB_NilTyp)) ||
+                   ((yf == ORB_Intfc) && (xf == ORB_NilTyp))) {
+            if (rel <= ORS_neq) {
+                ORG_IfaceRelation(rel, x, &y);
+            } else {
+                ORS_Mark("only = or #");
             }
         } else if (((xf == ORB_Pointer) || ((xf == ORB_Proc) && (yf == ORB_NilTyp))) ||
                    ((yf == ORB_Pointer) || ((yf == ORB_Proc) && (xf == ORB_NilTyp)))) {
@@ -1190,7 +1245,12 @@ static void StatSequence(void) {
                     CheckReadOnly(&x);
                     expression(&y);
                     if (CompTypes(x.type, y.type, FALSE)) {
-                        if ((x.type->form <= ORB_Pointer) || (x.type->form == ORB_Proc)) {
+                        if (x.type->form == ORB_Intfc) {
+                            if (y.type->form != ORB_Intfc) {
+                                ORG_PtrToIface(&y, x.type);   /* pointer or NIL */
+                            }
+                            ORG_StoreIface(&x, &y);
+                        } else if ((x.type->form <= ORB_Pointer) || (x.type->form == ORB_Proc)) {
                             ORG_Store(&x, &y);
                         } else {
                             ORG_StoreStruct(&x, &y);
@@ -1537,7 +1597,33 @@ static void RecordType(ORB_Type **type) {
         }
         Check(ORS_rparen, "no )");
     }
-    
+
+    if (sym == ORS_implements) {
+        /* declared conformance (DDR-008 §5.1): one base record, many
+           interfaces — checked at end of module, once the record's
+           methods have all been declared */
+        if (level != 0) {
+            ORS_Mark("IMPLEMENTS only at module level");
+        }
+        do {
+            ORS_Get(&sym);
+            if (sym == ORS_ident) {
+                qualident(&base);
+                if ((base->class == ORB_Typ) && (base->type != NULL) &&
+                    (base->type->form == ORB_Intfc)) {
+                    ORB_Impl *im = (ORB_Impl*)calloc(1, sizeof(ORB_Impl));
+                    im->intfc = base->type;
+                    im->next = typ->impl;
+                    typ->impl = im;
+                } else {
+                    ORS_Mark("interface expected");
+                }
+            } else {
+                ORS_Mark("ident expected");
+            }
+        } while (sym == ORS_comma);
+    }
+
     while (sym == ORS_ident) {
         n = 0;
         obj = bot;
@@ -1613,9 +1699,11 @@ static void FPSection(LONGINT *adr, INTEGER *nofpar) {
     FormalType(&tp, 0);
 
     rdo = FALSE;
-    if ((cl == ORB_Var) && (tp->form >= ORB_Array)) {
+    if ((cl == ORB_Var) && (tp->form >= ORB_Array) && (tp->form != ORB_Intfc)) {
         cl = ORB_Par;
         rdo = TRUE;  // Array/record value parameters promoted to ORB_Par, read-only
+        // (interface values stay by-value: they're a two-word fat pointer,
+        // and conversions produce temporaries with no address)
     }
 
     if ((tp->form == ORB_Array) && (tp->len < 0)) {
@@ -1673,9 +1761,10 @@ static void ProcedureType(ORB_Type *ptype, LONGINT *parblksize) {
             if (sym == ORS_ident) {
                 qualident(&obj);
                 ptype->base = obj->type;
-                if (!((obj->class ==ORB_Typ) && 
+                if (!((obj->class ==ORB_Typ) &&
                       (((obj->type->form >= ORB_Byte) && (obj->type->form <= ORB_Pointer)) ||
-                      (obj->type->form == ORB_Proc)))) {
+                      (obj->type->form == ORB_Proc) ||
+                      (obj->type->form == ORB_Intfc)))) {
                     ORS_Mark("illegal function type");
                 }
             } else {
@@ -1733,6 +1822,128 @@ static void CheckRecLevel(INTEGER lev) {
     }
 }
 
+/* INTERFACE ... END (DDR-008 §3/§4): method signatures only — receivers
+   implicit, no bodies, no export marks (members share the interface's
+   visibility). A bare interface name in member position INCLUDES that
+   interface: flattening union, identical signatures collapse, same name
+   with a different signature is an ambiguity error. Member val is the
+   itable index in the flattened set. */
+static void InterfaceType(ORB_Type **type) {
+    ORB_Type *typ;
+    ObjectPtr tail = NULL;
+    int slot = 0;
+
+    typ = (ORB_Type*)calloc(1, sizeof(ORB_Type));
+    typ->form = ORB_Intfc;
+    typ->size = 16;          /* fat pointer { data, itable } */
+    typ->mno = -level;
+
+    while ((sym == ORS_ident) || (sym == ORS_procedure)) {
+        if (sym == ORS_ident) {
+            /* inclusion by naming */
+            ORB_Object *iobj;
+            qualident(&iobj);
+            if ((iobj->class == ORB_Typ) && (iobj->type != NULL) &&
+                (iobj->type->form == ORB_Intfc)) {
+                ObjectPtr m;
+                /* remember the inclusion: implementing this interface
+                   implements the included one too (conformance looks
+                   through inclusions) */
+                ORB_Impl *inc = (ORB_Impl*)calloc(1, sizeof(ORB_Impl));
+                inc->intfc = iobj->type;
+                inc->next = typ->impl;
+                typ->impl = inc;
+                m = iobj->type->meth;
+                while (m != NULL) {
+                    ObjectPtr ex = typ->meth;
+                    while ((ex != NULL) && (strcmp(ex->name, m->name) != 0)) {
+                        ex = ex->next;
+                    }
+                    if (ex != NULL) {
+                        /* diamond collapse: identical signatures merge */
+                        if (!EqualSignatures(ex->type, m->type)) {
+                            ORS_Mark("conflicting signatures in included interfaces");
+                        }
+                    } else {
+                        ObjectPtr nm = (ObjectPtr)calloc(1, sizeof(ORB_Object));
+                        *nm = *m;
+                        nm->next = NULL;
+                        nm->val = slot;
+                        slot++;
+                        if (tail == NULL) {
+                            typ->meth = nm;
+                        } else {
+                            tail->next = nm;
+                        }
+                        tail = nm;
+                    }
+                    m = m->next;
+                }
+            } else {
+                ORS_Mark("interface expected");
+            }
+        } else {
+            /* PROCEDURE Name [FormalParameters] — a required signature */
+            ORS_Get(&sym);
+            if (sym == ORS_ident) {
+                ObjectPtr nm;
+                ORB_Type *ptype;
+                ORB_Object *rp;
+                LONGINT dmy = 0;
+                ORS_Ident mname;
+                strcpy(mname, ORS_id);
+                ORS_Get(&sym);
+
+                ptype = (ORB_Type*)calloc(1, sizeof(ORB_Type));
+                ptype->form = ORB_Proc;
+                ptype->size = 4;
+                ptype->mthd = TRUE;
+                OpenScope();
+                /* synthetic receiver slot: the conforming type is unknown
+                   here, so its static type is just "some pointer" */
+                NewObj(&rp, "", ORB_Var);
+                rp->type = nilType;
+                rp->lev = level;
+                ProcedureType(ptype, &dmy);
+                ptype->nofpar++;
+                ptype->dsc = topScope->next;
+                CloseScope();
+
+                nm = typ->meth;
+                while ((nm != NULL) && (strcmp(nm->name, mname) != 0)) {
+                    nm = nm->next;
+                }
+                if (nm != NULL) {
+                    ORS_Mark("mult def");
+                } else {
+                    nm = (ObjectPtr)calloc(1, sizeof(ORB_Object));
+                    strcpy(nm->name, mname);
+                    nm->class = ORB_Meth;
+                    nm->expo = TRUE;
+                    nm->type = ptype;
+                    nm->val = slot;
+                    slot++;
+                    if (tail == NULL) {
+                        typ->meth = nm;
+                    } else {
+                        tail->next = nm;
+                    }
+                    tail = nm;
+                }
+            } else {
+                ORS_Mark("method name expected");
+            }
+        }
+        if (sym == ORS_semicolon) {
+            ORS_Get(&sym);
+        } else if (sym != ORS_end) {
+            ORS_Mark("; or END");
+        }
+    }
+    typ->nofmeth = slot;
+    *type = typ;
+}
+
 static void Type0(ORB_Type **type) {
     LONGINT dmy;
     ORB_Object *obj;
@@ -1771,6 +1982,10 @@ static void Type0(ORB_Type **type) {
     } else if (sym == ORS_record) {
         ORS_Get(&sym);
         RecordType(type);
+        Check(ORS_end, "no END");
+    } else if (sym == ORS_interface) {
+        ORS_Get(&sym);
+        InterfaceType(type);
         Check(ORS_end, "no END");
     } else if (sym == ORS_pointer) {
         ORS_Get(&sym);
@@ -2468,6 +2683,9 @@ static void ProcedureDecl(void) {
                 expression(&x);
                 if (!CompTypes(type->base, x.type, FALSE)) {
                     ORS_Mark("wrong result type");
+                } else if ((type->base->form == ORB_Intfc) &&
+                           (x.type->form != ORB_Intfc)) {
+                    ORG_PtrToIface(&x, type->base);
                 }
             } else {
                 // Procedure - no expression allowed
@@ -2502,6 +2720,78 @@ static void ProcedureDecl(void) {
         SuperInitCalled = savedSuperInit;
     } else {
         ORS_Mark("proc id expected");
+    }
+}
+
+/* Conformance signature check (DDR-008 §5.2): record method vs interface
+   member. Both types carry a receiver as param 0 (the interface's is
+   synthetic), whose mode and type are excluded — only the declared
+   parameters and the result must match. */
+static BOOLEAN IfaceSigMatch(ORB_Type *mt, ORB_Type *it) {
+    ORB_Object *p0, *p1;
+    INTEGER n;
+
+    if ((mt->base != it->base) || (mt->nofpar != it->nofpar)) {
+        return FALSE;
+    }
+    p0 = mt->dsc;
+    p1 = it->dsc;
+    if ((p0 == NULL) || (p1 == NULL)) {
+        return FALSE;
+    }
+    p0 = p0->next;
+    p1 = p1->next;
+    n = mt->nofpar - 1;
+    while (n > 0) {
+        if ((p0 != NULL) && (p1 != NULL) &&
+            (p0->class == p1->class) && (p0->rdo == p1->rdo) &&
+            ((p0->type == p1->type) ||
+             ((p0->type->form == ORB_Array) && (p1->type->form == ORB_Array) &&
+              (p0->type->len == p1->type->len) && (p0->type->base == p1->type->base)) ||
+             ((p0->type->form == ORB_Proc) && (p1->type->form == ORB_Proc) &&
+              EqualSignatures(p0->type, p1->type)))) {
+            p0 = p0->next;
+            p1 = p1->next;
+            n--;
+        } else {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+/* The conformance check proper (DDR-008 §5.2), run once per module after
+   all procedure declarations: for every method in each declared
+   interface's flattened set, the record must have a matching type-bound
+   procedure — any gap names the missing method exactly. Deferred to here
+   because methods are declared after the TYPE section. */
+static void CheckConformance(void) {
+    ObjectPtr obj, m, rm;
+    ORB_Impl *im;
+    char msg[192];
+
+    for (obj = topScope->next; obj != NULL; obj = obj->next) {
+        if ((obj->class == ORB_Typ) && (obj->type != NULL) &&
+            (obj->type->form == ORB_Record) && (obj->type->mno <= 0)) {
+            for (im = obj->type->impl; im != NULL; im = im->next) {
+                const char *in = (im->intfc->typobj != NULL)
+                    ? im->intfc->typobj->name : "?";
+                for (m = im->intfc->meth; m != NULL; m = m->next) {
+                    rm = ORB_FindMeth(obj->type, m->name);
+                    if (rm == NULL) {
+                        snprintf(msg, sizeof(msg),
+                                 "%s does not implement %s.%s",
+                                 obj->name, in, m->name);
+                        ORS_Mark(msg);
+                    } else if (!IfaceSigMatch(rm->type, m->type)) {
+                        snprintf(msg, sizeof(msg),
+                                 "%s.%s: signature differs from %s.%s",
+                                 obj->name, m->name, in, m->name);
+                        ORS_Mark(msg);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -2567,6 +2857,7 @@ static void ORP_Module(void) {
             ProcedureDecl();
             Check(ORS_semicolon, "no ;");
         }
+        CheckConformance();   /* DDR-008: all methods are declared by now */
         ORG_Header();
         if (sym == ORS_begin) {
             ORS_Get(&sym);

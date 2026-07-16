@@ -29,7 +29,7 @@
 #include "Files.h"
 
 /* Constants */
-#define versionkey 3   /* v3: initialiser flag on type-bound procedures (DDR-003/004) */
+#define versionkey 4   /* v4: interface types + record conformance (DDR-008) */
 #define maxTypTab 64
 
 /* Class values */
@@ -58,11 +58,22 @@
 #define ORB_String 11
 #define ORB_Array 12
 #define ORB_Record 13
+#define ORB_Intfc 14   /* INTERFACE (DDR-008): nominal, declared conformance.
+                          Runtime value is a fat pointer { data, itable };
+                          the itable holds vtable SLOT INDICES (i32), so one
+                          compile-time table per (record, interface) pair is
+                          valid for every extension of the record. */
 
 /* Forward declarations */
 typedef struct ORB_Object* ObjectPtr;
 typedef struct ORB_Module* ModulePtr;
 typedef struct ORB_Type* TypePtr;
+
+/* One declared conformance of a record to an interface (DDR-008). */
+typedef struct ORB_Impl {
+    TypePtr intfc;
+    struct ORB_Impl *next;
+} ORB_Impl;
 
 /* Type definitions */
 typedef struct ORB_Object {
@@ -106,9 +117,12 @@ typedef struct ORB_Type {
                           such pointers also don't appear in record TD ptr_offsets
                           so their targets aren't released by oc_release_fields.
                           Used to break reference cycles. */
-    /* Type-bound procedures (DDR-001). Records only. */
+    /* Type-bound procedures (DDR-001). Records and interfaces. For an
+       interface, meth is the FLATTENED member set (inclusion by naming,
+       DDR-008 §4) and each member's val is its itable index. */
     ObjectPtr meth;    /* own methods (class ORB_Meth), declaration order;
                           inherited methods stay in the base's list */
+    ORB_Impl *impl;    /* records: declared interface conformances (DDR-008) */
     int nofmeth;       /* total vtable slots incl. inherited, valid once this
                           record has own methods (or was imported); use
                           ORB_TotalMeths for the always-correct total */
@@ -144,6 +158,10 @@ ObjectPtr thismethod(TypePtr rec);   /* ORS_id lookup along the base chain */
 ObjectPtr thisinit(TypePtr rec);     /* ORS_id initialiser lookup (DDR-003 rule) */
 BOOLEAN ORB_HasInits(TypePtr rec);   /* any initialiser on the chain (NEW policy) */
 BOOLEAN ORB_HasVisibleInits(TypePtr rec); /* constructor set reachable from here */
+BOOLEAN ORB_Conforms(TypePtr rec, TypePtr intfc); /* declared on rec or an ancestor */
+ObjectPtr ORB_FindMeth(TypePtr rec, const char *name); /* chain walk, any
+                          visibility, initialisers excluded — conformance
+                          checking and itable construction */
 int ORB_TotalMeths(TypePtr rec);     /* total vtable slots incl. inherited */
 void OpenScope(void);
 void CloseScope(void);
