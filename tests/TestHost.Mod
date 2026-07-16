@@ -1,5 +1,5 @@
 MODULE TestHost;
-  IMPORT Out, Modules, TestRunner, Files, FileDir, Env,
+  IMPORT Errors, Out, Modules, TestRunner, Files, FileDir, Env,
          Branch, Loops, Cases, Short, Chain,
          Sets, Reals, Types, Guards, Guards2,
          Arrs, Recs, RecCopy, Strings, StrPass, Open,
@@ -65,6 +65,7 @@ BEGIN
   RunPlugin("CtorsTests");
   RunPlugin("SuperTests");
   RunPlugin("IfacesTests");
+  RunPlugin("ErrorsTests");
 
   Out.WriteString("======================="); Out.Ln();
   Out.WriteString("TOTAL: ");

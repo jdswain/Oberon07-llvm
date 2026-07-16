@@ -190,7 +190,7 @@ void Files__Purge(FileDesc *f) {
     f->length = 0;
 }
 
-void Files__Delete(const char *name, int name_len, int *res) {
+void Files__DeleteRaw(const char *name, int name_len, int *res) {
     char path[PATH_MAX];
     copy_name(name, name_len, path, sizeof(path));
     if (unlink(path) == 0) *res = 0;
@@ -198,7 +198,7 @@ void Files__Delete(const char *name, int name_len, int *res) {
     else *res = 1;
 }
 
-void Files__Rename(const char *oldn, int old_len,
+void Files__RenameRaw(const char *oldn, int old_len,
                    const char *newn, int new_len, int *res) {
     char op[PATH_MAX], np[PATH_MAX];
     copy_name(oldn, old_len, op, sizeof(op));
@@ -240,7 +240,7 @@ static int files_mkdir_p(const char *path) {
     return 0;
 }
 
-void Files__MakeDir(const char *name, int name_len, int *res) {
+void Files__MakeDirRaw(const char *name, int name_len, int *res) {
     char path[PATH_MAX];
     copy_name(name, name_len, path, sizeof(path));
     *res = files_mkdir_p(path) == 0 ? 0 : 1;

@@ -222,11 +222,11 @@ void Files__Purge(FileDesc *f) {
     f->length = 0;
 }
 
-void Files__Delete(const char *name, int name_len, int *res) {
+void Files__DeleteRaw(const char *name, int name_len, int *res) {
     *res = js_files_delete(name, name_len);
 }
 
-void Files__Rename(const char *oldn, int old_len,
+void Files__RenameRaw(const char *oldn, int old_len,
                    const char *newn, int new_len, int *res) {
     *res = js_files_rename(oldn, old_len, newn, new_len);
 }
@@ -245,7 +245,7 @@ int Files__Exists(const char *name, int name_len) {
     return js_files_exists(name, name_len);
 }
 
-void Files__MakeDir(const char *name, int name_len, int *res) {
+void Files__MakeDirRaw(const char *name, int name_len, int *res) {
     *res = js_files_mkdir(name, name_len);
 }
 

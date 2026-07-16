@@ -9,6 +9,8 @@ MODULE Files;
    bytewise fseek/fread/fwrite. There is no disk image, no B-tree, no
    page cache — that all collapses to the host filesystem. *)
 
+  IMPORT Errors;
+
   CONST FnLength* = 256;
 
   TYPE
@@ -52,12 +54,44 @@ MODULE Files;
   BEGIN
   END Purge;
 
-  PROCEDURE Delete*(name: ARRAY OF CHAR; VAR res: INTEGER);
+  (* Raw C bridges (Files_rt.c). Exported so the empty bodies get weak
+     linkage and the C definitions override them; not for user code.
+     res: 0 = ok, 2 = not found, otherwise failure. *)
+  PROCEDURE DeleteRaw*(name: ARRAY OF CHAR; VAR res: INTEGER);
   BEGIN
+  END DeleteRaw;
+
+  PROCEDURE RenameRaw*(old, new: ARRAY OF CHAR; VAR res: INTEGER);
+  BEGIN
+  END RenameRaw;
+
+  PROCEDURE MakeDirRaw*(name: ARRAY OF CHAR; VAR res: INTEGER);
+  BEGIN
+  END MakeDirRaw;
+
+  (* Map a raw res code to the DDR-009 error convention. *)
+  PROCEDURE resToErr(res: INTEGER; op: ARRAY OF CHAR; VAR err: Errors.Error);
+  BEGIN
+    IF res = 0 THEN err := NIL
+    ELSIF res = 2 THEN err := Errors.Error.Create(res, "not found")
+    ELSE err := Errors.Error.Create(res, op)
+    END
+  END resToErr;
+
+  PROCEDURE Delete*(name: ARRAY OF CHAR; VAR err: Errors.Error);
+    VAR res: INTEGER;
+  BEGIN
+    res := 0;
+    DeleteRaw(name, res);
+    resToErr(res, "delete failed", err)
   END Delete;
 
-  PROCEDURE Rename*(old, new: ARRAY OF CHAR; VAR res: INTEGER);
+  PROCEDURE Rename*(old, new: ARRAY OF CHAR; VAR err: Errors.Error);
+    VAR res: INTEGER;
   BEGIN
+    res := 0;
+    RenameRaw(old, new, res);
+    resToErr(res, "rename failed", err)
   END Rename;
 
   (* 1 if the named filesystem entry exists (file, dir, link, ...),
@@ -67,9 +101,13 @@ MODULE Files;
   END Exists;
 
   (* mkdir -p: create `name` and any missing parent directories.
-     res = 0 on success, non-zero on failure other than already-exists. *)
-  PROCEDURE MakeDir*(name: ARRAY OF CHAR; VAR res: INTEGER);
+     Already-exists is success. *)
+  PROCEDURE MakeDir*(name: ARRAY OF CHAR; VAR err: Errors.Error);
+    VAR res: INTEGER;
   BEGIN
+    res := 0;
+    MakeDirRaw(name, res);
+    resToErr(res, "mkdir failed", err)
   END MakeDir;
 
   (* Streaming directory iteration. On wasm this round-trips through
