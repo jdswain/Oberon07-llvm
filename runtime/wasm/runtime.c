@@ -132,6 +132,16 @@ void oc_record_assign(void *dst, void *src, void *td) {
 
 /* Release every element of an ARRAY OF POINTER. Used by procedure epilogues
  * to clean up top-level pointer-array locals. */
+/* Release the leading pointer of each `stride`-byte element. Used for
+ * stack arrays of interface fat values ({ data, itable }, 16 bytes): the
+ * data word leads each element and is the only refcounted part. */
+void oc_release_strided(void *p, int64_t n, int64_t stride) {
+    if (!p) return;
+    for (int64_t i = 0; i < n; i++) {
+        oc_release(*(void **)((char *)p + i * stride));
+    }
+}
+
 void oc_release_array(void *p, int64_t n) {
     if (!p || n <= 0) return;
     void **arr = (void **)p;

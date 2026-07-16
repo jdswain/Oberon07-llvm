@@ -6,7 +6,7 @@ MODULE TestHost;
          StackRec, ArrPtrs, Arc, ArcCons, Weak, Tree,
          App, Util, Diamond, A, B, Counter, Mix, Math,
          Repeat, While, For,
-         Methods, MethBase, MethExt, Ctors, Super;
+         Methods, MethBase, MethExt, Ctors, Super, Ifaces;
 
   VAR totalPassed, totalFailed: INTEGER;
 
@@ -64,6 +64,7 @@ BEGIN
   RunPlugin("MethodsTests");
   RunPlugin("CtorsTests");
   RunPlugin("SuperTests");
+  RunPlugin("IfacesTests");
 
   Out.WriteString("======================="); Out.Ln();
   Out.WriteString("TOTAL: ");
