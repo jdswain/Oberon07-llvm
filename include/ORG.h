@@ -117,7 +117,7 @@ void ORG_CopyString(ORG_Item *x, ORG_Item *y);
 // Parameter operations
 void ORG_OpenArrayParam(ORG_Item *x);
 void ORG_VarParam(ORG_Item *x, ORB_Type *ftype);
-void ORG_ValueParam(ORG_Item *x);
+void ORG_ValueParam(ORG_Item *x, ORB_Type *ftype);
 void ORG_StringParam(ORG_Item *x);
 
 // For statement operations

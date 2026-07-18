@@ -551,7 +551,7 @@ static void Parameter(ORB_Object *par) {
                 if ((par->type->form == ORB_Intfc) && (x.type->form != ORB_Intfc)) {
                     ORG_PtrToIface(&x, par->type);   /* pointer or NIL actual */
                 }
-                ORG_ValueParam(&x);
+                ORG_ValueParam(&x, par->type);
             } else {
                 if (!par->rdo) {
                     CheckReadOnly(&x);
@@ -569,11 +569,11 @@ static void Parameter(ORB_Object *par) {
                    (par->type->len < 0)) {
             ORG_StringParam(&x);
         } else if (!varpar && (par->type->form == ORB_Int) && (x.type->form == ORB_Int)) {
-            ORG_ValueParam(&x);  // BYTE
+            ORG_ValueParam(&x, par->type);  // BYTE
         } else if ((x.type->form == ORB_String) && (x.b == 2) && 
                    (par->class == ORB_Var) && (par->type->form == ORB_Char)) {
             ORG_StrToChar(&x);
-            ORG_ValueParam(&x);
+            ORG_ValueParam(&x, par->type);
         } else if ((par->type->form == ORB_Array) && (par->type->base == byteType) &&
                    (par->type->len >= 0) && (par->type->size == x.type->size)) {
             ORG_VarParam(&x, par->type);
@@ -2681,7 +2681,10 @@ static void ProcedureDecl(void) {
             if (type->base->form != ORB_NoTyp) {
                 // Function - must have expression
                 expression(&x);
-                if (!CompTypes(type->base, x.type, FALSE)) {
+                // Mixed integer widths are permitted, consistent with
+                // assignment and value parameters (ORG_Return widens).
+                if (!CompTypes(type->base, x.type, FALSE) &&
+                    !((type->base->form == ORB_Int) && (x.type->form == ORB_Int))) {
                     ORS_Mark("wrong result type");
                 } else if ((type->base->form == ORB_Intfc) &&
                            (x.type->form != ORB_Intfc)) {

@@ -60,3 +60,6 @@ tests/out.txt
 .claude/
 .vscode/
 .idea/
+
+# Self-hosted compiler build artifacts (self/)
+self/oc-self

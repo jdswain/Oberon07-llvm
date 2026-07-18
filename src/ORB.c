@@ -501,6 +501,8 @@ static void InType(Files_Rider *R, ObjectPtr thismod, TypePtr *T) {
         }
 
         if (form == ORB_Pointer) {
+            Read(R, &class);
+            t->weak = (class == 1);
             InType(R, thismod, &t->base);
             t->size = 4;
         } else if (form == ORB_Array) {
@@ -849,6 +851,11 @@ static void OutType(Files_Rider *R, TypePtr t) {
         }
 
         if (t->form == ORB_Pointer) {
+            /* v5: persist the WEAK flag — an imported weak pointer that
+               loses it becomes strong, and records holding it suddenly
+               get ARC field-release treatment (releasing never-retained
+               targets). */
+            Write(R, t->weak ? 1 : 0);
             OutType(R, t->base);
         } else if (t->form == ORB_Array) {
             OutType(R, t->base);

@@ -638,6 +638,17 @@ static void consume_arc(ORG_Item *x, LLVMValueRef val) {
     }
 }
 
+
+// Widen an integer value to `want`, honouring Oberon signedness: BYTE
+// (form Int, size 1) is unsigned 0..255 and zero-extends; every other
+// integer sign-extends. `st` is the value's Oberon type (may be NULL).
+static LLVMValueRef emit_widen(LLVMValueRef v, LLVMTypeRef want, ORB_Type *st) {
+    if (st && st->form == ORB_Int && st->size == 1) {
+        return LLVMBuildZExt(Bld, v, want, "zx");
+    }
+    return LLVMBuildSExt(Bld, v, want, "sx");
+}
+
 // Widen the narrower of two integer values to match the wider, sign-
 // extending. If x got widened, promote x->type to y's type so that the
 // surrounding expression sees the wider Oberon type. Used by all integer
@@ -651,11 +662,11 @@ static void coerce_pair(ORG_Item *x, ORG_Item *y,
     unsigned aw = LLVMGetIntTypeWidth(at);
     unsigned bw = LLVMGetIntTypeWidth(bt);
     if (aw < bw) {
-        *a = LLVMBuildSExt(Bld, *a, bt, "wid");
+        *a = emit_widen(*a, bt, x->type);
         x->type = y->type;
         x->orig_type = y->orig_type;
     } else {
-        *b = LLVMBuildSExt(Bld, *b, at, "wid");
+        *b = emit_widen(*b, at, y->type);
     }
 }
 
@@ -1361,8 +1372,25 @@ void ORG_DivOp(LONGINT op, ORG_Item *x, ORG_Item *y) {
     LLVMValueRef a = LoadItem(x), b = LoadItem(y);
     coerce_pair(x, y, &a, &b);
     x->mode = Reg;
-    if (op == ORS_div) x->backend = LLVMBuildSDiv(Bld, a, b, "div");
-    else               x->backend = LLVMBuildSRem(Bld, a, b, "mod");
+    // Oberon DIV/MOD are FLOORED (x = (x DIV y)*y + x MOD y with
+    // 0 <= x MOD y < y for y > 0), not LLVM's truncated sdiv/srem.
+    // Adjust when the remainder is nonzero and the signs differ:
+    //   div: q - 1;  mod: r + b.
+    LLVMTypeRef t = LLVMTypeOf(a);
+    LLVMValueRef zero = LLVMConstInt(t, 0, 1);
+    LLVMValueRef r = LLVMBuildSRem(Bld, a, b, "rem");
+    LLVMValueRef rnz = LLVMBuildICmp(Bld, LLVMIntNE, r, zero, "rnz");
+    LLVMValueRef sgn = LLVMBuildICmp(Bld, LLVMIntSLT,
+        LLVMBuildXor(Bld, a, b, "sx"), zero, "sgn");
+    LLVMValueRef adj = LLVMBuildAnd(Bld, rnz, sgn, "adj");
+    if (op == ORS_div) {
+        LLVMValueRef q = LLVMBuildSDiv(Bld, a, b, "quo");
+        LLVMValueRef qm1 = LLVMBuildSub(Bld, q, LLVMConstInt(t, 1, 1), "qm1");
+        x->backend = LLVMBuildSelect(Bld, adj, qm1, q, "div");
+    } else {
+        LLVMValueRef rpb = LLVMBuildAdd(Bld, r, b, "rpb");
+        x->backend = LLVMBuildSelect(Bld, adj, rpb, r, "mod");
+    }
 }
 
 void ORG_RealOp(INTEGER op, ORG_Item *x, ORG_Item *y) {
@@ -1522,7 +1550,7 @@ void ORG_Store(ORG_Item *x, ORG_Item *y) {
             unsigned sb = LLVMGetIntTypeWidth(src_ty);
             unsigned db = LLVMGetIntTypeWidth(dst_ty);
             if (db < sb)      rhs = LLVMBuildTrunc(Bld, rhs, dst_ty, "tr");
-            else if (db > sb) rhs = LLVMBuildSExt(Bld,  rhs, dst_ty, "sx");
+            else if (db > sb) rhs = emit_widen(rhs, dst_ty, y->type);
         }
     }
     LLVMBuildStore(Bld, rhs, addr);
@@ -1603,9 +1631,23 @@ void ORG_VarParam(ORG_Item *x, ORB_Type *ftype) {
     }
     CallArgs[CallTop][CallArgC[CallTop]++] = LValueItem(x);
 }
-void ORG_ValueParam(ORG_Item *x) {
+void ORG_ValueParam(ORG_Item *x, ORB_Type *ftype) {
     if (CallTop < 0 || CallArgC[CallTop] >= MAX_CALL_ARGS) return;
     LLVMValueRef v = LoadItem(x);
+    // Coerce mixed integer widths to the formal's width (INTEGER actual
+    // for a LONGINT formal and vice versa) — the call ABI must match the
+    // declared function type exactly.
+    if (ftype && ftype->form == ORB_Int && x->type && x->type->form == ORB_Int) {
+        LLVMTypeRef want = LlvmType(ftype);
+        LLVMTypeRef have = LLVMTypeOf(v);
+        if (want != have &&
+            LLVMGetTypeKind(want) == LLVMIntegerTypeKind &&
+            LLVMGetTypeKind(have) == LLVMIntegerTypeKind) {
+            unsigned wb = LLVMGetIntTypeWidth(want), hb = LLVMGetIntTypeWidth(have);
+            if (wb < hb)      v = LLVMBuildTrunc(Bld, v, want, "ptr8");
+            else if (wb > hb) v = emit_widen(v, want, x->type);
+        }
+    }
     int slot = CallArgC[CallTop];
     CallArgs[CallTop][slot] = v;
     // If the argument is a +1-owned function-call result, the caller still
@@ -2096,7 +2138,7 @@ void ORG_Return(ORB_Object *proc, ORG_Item *x) {
             LLVMGetTypeKind(ret_ty) == LLVMIntegerTypeKind) {
             unsigned sb = LLVMGetIntTypeWidth(rv_ty), db = LLVMGetIntTypeWidth(ret_ty);
             if (db < sb)      rv = LLVMBuildTrunc(Bld, rv, ret_ty, "rtr");
-            else if (db > sb) rv = LLVMBuildSExt(Bld,  rv, ret_ty, "rsx");
+            else if (db > sb) rv = emit_widen(rv, ret_ty, x ? x->type : NULL);
         }
 
         // ARC: retain the return value BEFORE releasing locals — the value

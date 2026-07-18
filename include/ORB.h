@@ -29,7 +29,7 @@
 #include "Files.h"
 
 /* Constants */
-#define versionkey 4   /* v4: interface types + record conformance (DDR-008) */
+#define versionkey 5   /* v5: weak flag persisted on pointer types */
 #define maxTypTab 64
 
 /* Class values */
