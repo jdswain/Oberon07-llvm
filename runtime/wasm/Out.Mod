@@ -5,7 +5,7 @@ MODULE Out;
   BEGIN
   END Write;
 
-  PROCEDURE WriteString*(VAR s: ARRAY OF CHAR);
+  PROCEDURE WriteString*(s: ARRAY OF CHAR);
   BEGIN
   END WriteString;
 
