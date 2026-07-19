@@ -14,6 +14,19 @@ MODULE ORG; (* Interface to the LLVM code generator (DDR C-bridge module).
 
   IMPORT ORB;
 
+  (* Target parameters (DDR back-porting: the frontend reads these so
+     ORS/ORB/ORP are shared with the 65C816 backend). For LLVM the byte
+     sizes are nominal — the backend lays out structs via the LLVM ABI
+     and ignores frontend offsets — so these keep their historical values
+     and nothing about the emitted IR changes. *)
+  CONST
+    WordSize* = 4;
+    SetMax* = 32;      (* SET elements 0 .. SetMax-1 *)
+    ParLimit* = 52;    (* max parameter-block size *)
+    IntSize* = 4; LongSize* = 8; RealSize* = 4;
+    SetSize* = 4; NilSize* = 4; StrSize* = 8;
+    PtrSize* = 4; IntfcSize* = 16;   (* fat pointer = two native 8-byte ptrs *)
+
   TYPE
     Item* = RECORD
       mode*: INTEGER;
@@ -23,6 +36,20 @@ MODULE ORG; (* Interface to the LLVM code generator (DDR C-bridge module).
       origType*: ORB.WType;         (* original operand type for signed cmps *)
       backend*, backend2*: LONGINT  (* codegen-private *)
     END;
+
+  (* Register this target's SYSTEM pseudo-module identifiers. Called by
+     ORP after ORB.Initialize. Each backend supplies its own set with
+     target-appropriate result types and arities (n = procno*10 + nofpar). *)
+  PROCEDURE InitSystem*;
+  BEGIN
+    ORB.SysFunc("SIZE", ORB.intType, 181);
+    ORB.SysFunc("ADR", ORB.longType, 171);
+    ORB.SysFunc("VAL", ORB.intType, 162);
+    ORB.SysFunc("BIT", ORB.boolType, 142);
+    ORB.SysProc("COPY", ORB.noType, 123);
+    ORB.SysProc("PUT", ORB.noType, 112);
+    ORB.SysProc("GET", ORB.noType, 102)
+  END InitSystem;
 
   (* --- item construction --- *)
   PROCEDURE MakeConstItem*(VAR x: Item; typ: ORB.Type; val: LONGINT);
@@ -215,6 +242,27 @@ MODULE ORG; (* Interface to the LLVM code generator (DDR C-bridge module).
   BEGIN END Bit;
   PROCEDURE Adr*(VAR x: Item);
   BEGIN END Adr;
+
+  (* --- 65C816-only SYSTEM entry points (inert on LLVM: never registered
+     by InitSystem, so ORP never dispatches to them) --- *)
+  PROCEDURE GetB*(VAR bank, addr, var: Item);
+  BEGIN END GetB;
+  PROCEDURE PutB*(VAR bank, addr, val: Item);
+  BEGIN END PutB;
+  PROCEDURE TRB*(VAR x, y: Item);
+  BEGIN END TRB;
+  PROCEDURE TSB*(VAR x, y: Item);
+  BEGIN END TSB;
+  PROCEDURE Exec*(VAR addr, bank: Item);
+  BEGIN END Exec;
+  PROCEDURE IntEn*(VAR x: Item);
+  BEGIN END IntEn;
+  PROCEDURE Bank*(VAR x: Item);
+  BEGIN END Bank;
+  PROCEDURE HH*(VAR x: Item);
+  BEGIN END HH;
+  PROCEDURE Condition*(VAR x: Item);
+  BEGIN END Condition;
 
   (* --- module management --- *)
   PROCEDURE Open*(modid: ARRAY OF CHAR; v: INTEGER);

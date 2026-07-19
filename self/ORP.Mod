@@ -14,7 +14,7 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
   IMPORT Files, Out, ORS, ORB, ORG;
 
   CONST VERSION = 1;
-    WordSize = 4;
+    WordSize = ORG.WordSize;   (* target word size, from the backend *)
 
   TYPE
     PtrBase = POINTER TO PtrBaseDesc;
@@ -85,7 +85,7 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
   BEGIN
     IF x.type.form # ORB.Int THEN ORS.Mark("not Int"); x.type := ORB.setType
     ELSIF x.mode = ORB.Const THEN
-      IF (x.a < 0) OR (x.a >= 32) THEN ORS.Mark("invalid set") END
+      IF (x.a < 0) OR (x.a >= ORG.SetMax) THEN ORS.Mark("invalid set") END
     END
   END CheckSetVal;
 
@@ -498,6 +498,11 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
           ORG.MakeConstItem(x, ORB.intType, x.type.size)
         ELSE ORS.Mark("must be a type")
         END
+      (* 65C816-only SYSTEM functions; unregistered (hence unreachable)
+         on the LLVM target, where the ORG stubs are inert. *)
+      ELSIF fct = 19 THEN ORG.Condition(x)             (* SYSTEM.COND *)
+      ELSIF fct = 20 THEN ORG.HH(x)                    (* SYSTEM.H *)
+      ELSIF fct = 21 THEN ORG.Bank(x)                  (* SYSTEM.BANK *)
       END;
       x.type := restyp
     ELSE ORS.Mark("wrong nof params")
@@ -766,12 +771,19 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
         CheckReal(x); CheckInt(y); CheckReadOnly(x); ORG.Pack(x, y)
       ELSIF pno = 7 THEN  (* UNPK *)
         CheckReal(x); CheckInt(y); CheckReadOnly(x); ORG.Unpk(x, y)
-      ELSIF pno = 10 THEN  (* GET *)
-        CheckInt(x); ORG.Get(x, y)
-      ELSIF pno = 11 THEN  (* PUT *)
-        CheckInt(x); ORG.Put(x, y)
+      ELSIF pno = 10 THEN  (* GET: (addr,var) or 65C816 (bank,addr,var) *)
+        CheckInt(x);
+        IF nap = 3 THEN ORG.GetB(x, y, z) ELSE ORG.Get(x, y) END
+      ELSIF pno = 11 THEN  (* PUT: (addr,val) or 65C816 (bank,addr,val) *)
+        CheckInt(x);
+        IF nap = 3 THEN ORG.PutB(x, y, z) ELSE ORG.Put(x, y) END
       ELSIF pno = 12 THEN  (* COPY *)
         CheckInt(x); CheckInt(y); CheckInt(z); ORG.Copy(x, y, z)
+      (* 65C816-only SYSTEM procedures; unregistered on LLVM. *)
+      ELSIF pno = 9 THEN   (* INTEN *) ORG.IntEn(x)
+      ELSIF pno = 13 THEN  (* TRB *) CheckInt(x); ORG.TRB(x, y)
+      ELSIF pno = 14 THEN  (* TSB *) CheckInt(x); ORG.TSB(x, y)
+      ELSIF pno = 15 THEN  (* EXEC *) ORG.Exec(x, y)
       END
     ELSE ORS.Mark("wrong nof parameters")
     END
@@ -1246,7 +1258,7 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
       adr := adr + parsize;
       first := first.next
     END;
-    IF adr >= 52 THEN ORS.Mark("too many parameters") END
+    IF adr >= ORG.ParLimit THEN ORS.Mark("too many parameters") END
   END FPSection;
 
   PROCEDURE ProcedureType(ptype: ORB.Type; VAR parblksize: LONGINT);
@@ -2094,7 +2106,10 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
   END ErrCnt;
 
 BEGIN
-  ORB.Initialize;
+  ORB.Initialize(ORG.IntSize, ORG.LongSize, ORG.RealSize,
+                 ORG.SetSize, ORG.NilSize, ORG.StrSize,
+                 ORG.PtrSize, ORG.IntfcSize);
+  ORG.InitSystem;   (* backend registers its own SYSTEM pseudo-module *)
   ORB.Init;
   ORG.Init;
   NEW(dummy); dummy.class := ORB.Var; dummy.type := ORB.intType;

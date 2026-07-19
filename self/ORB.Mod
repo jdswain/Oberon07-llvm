@@ -81,6 +81,7 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
 
     nofmod: INTEGER;
     Ref: INTEGER;
+    ptrSize, intfcSize: INTEGER;   (* target sizes, set by Initialize *)
     typtab: ARRAY maxTypTab OF Type;
     sourceDir: ARRAY 256 OF CHAR;
     searchPaths: ARRAY 8 OF ARRAY 256 OF CHAR;
@@ -428,7 +429,7 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
       IF form = Pointer THEN
         Read(R, class);
         t.weak := class = 1;
-        InType(R, thismod, t.base); t.size := 4
+        InType(R, thismod, t.base); t.size := ptrSize
       ELSIF form = Array THEN
         InType(R, thismod, t.base);
         RNum(R, n); t.len := n;
@@ -477,7 +478,7 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
           Read(R, class)
         END
       ELSIF form = Intfc THEN
-        t.size := 16;   (* fat pointer {data, itable} *)
+        t.size := intfcSize;   (* fat pointer {data, itable} *)
         Read(R, class); lastmeth := NIL;
         WHILE class # 0 DO
           NEW(mth); mth.class := Meth; mth.expo := TRUE;
@@ -511,7 +512,7 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
           par.next := obj; obj := par; INC(np);
           Read(R, class)
         END;
-        t.dsc := obj; t.nofpar := np; t.size := 4
+        t.dsc := obj; t.nofpar := np; t.size := ptrSize
       END;
       (* unify basic types with the global type objects so pointer
          equality works across module boundaries *)
@@ -519,7 +520,7 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
       ELSIF form = Bool THEN T := boolType; typtab[ref] := T
       ELSIF form = Char THEN T := charType; typtab[ref] := T
       ELSIF form = Int THEN
-        IF t.size >= 8 THEN T := longType ELSE T := intType END;
+        IF t.size >= longType.size THEN T := longType ELSE T := intType END;
         typtab[ref] := T
       ELSIF form = Real THEN T := realType; typtab[ref] := T
       ELSIF form = Set THEN T := setType; typtab[ref] := T
@@ -843,20 +844,37 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
     obj.next := systemScope; systemScope := obj
   END enter;
 
-  PROCEDURE Initialize*;
+  (* Register a SYSTEM pseudo-module identifier. The backend's InitSystem
+     calls these after Initialize; each target supplies its own set with
+     target-appropriate result types and arities (DDR back-porting). *)
+  PROCEDURE SysFunc*(name: ARRAY OF CHAR; typ: Type; n: INTEGER);
+  BEGIN enter(name, SFunc, typ, n)
+  END SysFunc;
+
+  PROCEDURE SysProc*(name: ARRAY OF CHAR; typ: Type; n: INTEGER);
+  BEGIN enter(name, SProc, typ, n)
+  END SysProc;
+
+  (* Basic-type sizes are supplied by the backend (they differ per target:
+     e.g. INTEGER is 4 on LLVM, 2 on the 65C816; pointers are 4 on both;
+     an interface fat pointer is 16 on LLVM (two 8-byte native pointers)
+     but 8 on the 65C816). BYTE/BOOL/CHAR are 1 on every target. *)
+  PROCEDURE Initialize*(intSz, longSz, realSz, setSz, nilSz, strSz,
+                        ptrSz, intfcSz: INTEGER);
   BEGIN
+    ptrSize := ptrSz; intfcSize := intfcSz;
     byteType := type(Byte, Int, 1);
     boolType := type(Bool, Bool, 1);
     charType := type(Char, Char, 1);
-    intType := type(Int, Int, 4);
+    intType := type(Int, Int, intSz);
     (* longType shares form Int but must NOT overwrite typtab[Int] *)
-    NEW(longType); longType.form := Int; longType.size := 8;
+    NEW(longType); longType.form := Int; longType.size := longSz;
     longType.ref := 0; longType.base := NIL;
-    realType := type(Real, Real, 4);
-    setType := type(Set, Set, 4);
-    nilType := type(NilTyp, NilTyp, 4);
-    noType := type(NoTyp, NoTyp, 4);
-    strType := type(String, String, 8);
+    realType := type(Real, Real, realSz);
+    setType := type(Set, Set, setSz);
+    nilType := type(NilTyp, NilTyp, nilSz);
+    noType := type(NoTyp, NoTyp, nilSz);
+    strType := type(String, String, strSz);
 
     systemScope := NIL;  (* n = procno*10 + nofpar *)
 
@@ -900,15 +918,10 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
     topScope.next := systemScope;
     universe := topScope;
 
-    (* "unsafe" pseudo-module SYSTEM *)
-    systemScope := NIL;
-    enter("SIZE", SFunc, intType, 181);
-    enter("ADR", SFunc, longType, 171);
-    enter("VAL", SFunc, intType, 162);
-    enter("BIT", SFunc, boolType, 142);
-    enter("COPY", SProc, noType, 123);
-    enter("PUT", SProc, noType, 112);
-    enter("GET", SProc, noType, 102)
+    (* The "unsafe" pseudo-module SYSTEM is populated by the backend's
+       InitSystem (called next by ORP): its identifiers and their result
+       types/arities are target-specific. Leave the scope empty here. *)
+    systemScope := NIL
   END Initialize;
 
 BEGIN

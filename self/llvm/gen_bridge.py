@@ -21,7 +21,7 @@ Regenerate after changing src/ORG.c or the driver:  python3 gen_bridge.py
 """
 import re, pathlib
 
-SRC = pathlib.Path("../src")
+SRC = pathlib.Path("../../src")
 ORG = (SRC / "ORG.c").read_text()
 ORP = (SRC / "ORP.c").read_text()
 
@@ -355,6 +355,15 @@ driver = driver.replace(
 driver = driver.replace(
     'printf("Compilation failed with %d errors\\n", ORS_errcnt);',
     'printf("Compilation failed with %d errors\\n", ORS__errcnt);')
+
+# The oc-self binary lives one level deeper (self/llvm/) than the stage-0
+# C compiler (bin/), so the runtime modules are two levels up, not one.
+# Prepend that layout to every runtime-dir probe list. Harmless extra
+# probe for any other layout.
+driver = driver.replace(
+    '"/../runtime/%s/", "/runtime/%s/",',
+    '"/../../runtime/%s/", "/../runtime/%s/", "/runtime/%s/",')
+assert '"/../../runtime/%s/"' in driver, "runtime layout not patched"
 
 assert "ORP__Compile" in driver, "main() compile sequence not patched"
 
