@@ -109,7 +109,10 @@ MODULE ORS; (* NW 19.9.93 / 15.3.2017  Scanner in Oberon-07.
     REPEAT
       IF i < IdLen-1 THEN id[i] := ch; INC(i) END;
       Read
-    UNTIL (ch < "0") OR (ch > "9") & (ch < "A") OR (ch > "Z") & (ch < "a") OR (ch > "z");
+    UNTIL (ch < "0") OR (ch > "9") & (ch < "A") OR (ch > "Z") & (ch < "a") & (ch # "_") OR (ch > "z");
+    (* "_" (5FX) is a valid identifier char after the first letter (816 dialect
+       uses names like ACIA_DATA); Identifier is only entered on a letter, so a
+       leading underscore is still rejected. *)
     id[i] := 0X;
     sym := ident; j := 0;
     WHILE j < k DO

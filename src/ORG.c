@@ -2450,8 +2450,8 @@ void ORG_Bitwise(LONGINT fct, ORG_Item *x, ORG_Item *y) {
     coerce_pair(x, y, &a, &b);
     x->mode = Reg;
     if (fct == 0)      x->backend = LLVMBuildAnd(Bld, a, b, "band");
-    else if (fct == 1) x->backend = LLVMBuildOr (Bld, a, b, "bor");
-    else               x->backend = LLVMBuildXor(Bld, a, b, "bxor");
+    else if (fct == 1) x->backend = LLVMBuildXor(Bld, a, b, "bxor");  /* EOR */
+    else               x->backend = LLVMBuildOr (Bld, a, b, "bor");   /* ORA */
 }
 void ORG_UML(ORG_Item *x, ORG_Item *y) {
     LLVMValueRef a = LoadItem(x), b = LoadItem(y);
