@@ -2533,4 +2533,1222 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     RH := RH - 2
   END Exec;
 
+  (* --- inline functions --- *)
+  PROCEDURE Abs*(VAR x: Item);
+  BEGIN
+    IF x.mode = ORB.Const THEN
+      IF x.a < 0 THEN x.a := -x.a END
+    ELSE
+      load(x);
+      IF x.type.form = ORB.Real THEN
+        Set16(TRUE, TRUE);
+        OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(x.r + 1), 0);
+        OCG.Gen(OCG.AND, OCG.mImm, 7FFFH, 0);
+        OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r + 1), 0)
+      ELSE
+        Set16(TRUE, TRUE);
+        OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(x.r), 0);
+        OCG.Gen(OCG.BPL, OCG.mPCR, OCG.Here() + 2 + 6, 0);
+        OCG.Gen(OCG.EOR, OCG.mImm, 0FFFFH, 0);
+        OCG.Gen(OCG.INC, OCG.mAcc, 0, 0);
+        OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r), 0)
+      END
+    END
+  END Abs;
+
+  PROCEDURE Odd*(VAR x: Item);
+  BEGIN
+    load(x); Set16(TRUE, TRUE);
+    OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(x.r), 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 1, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r), 0);
+    SetCC(x, NE); RH := RH - 1
+  END Odd;
+
+  PROCEDURE Floor*(VAR x: Item);
+  BEGIN
+    load(x); Set16(TRUE, TRUE);
+    OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(x.r), 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_A_LO, 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(x.r + 1), 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_A_HI, 0);
+    addFPFixup(FP_FLOOR); OCG.Gen(OCG.JSR, OCG.mAbs, 0, 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_A_LO, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r), 0);
+    RH := RH - 1; x.type := ORB.intType
+  END Floor;
+
+  PROCEDURE Float*(VAR x: Item);
+  BEGIN
+    load(x); Set16(TRUE, TRUE);
+    OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(x.r), 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_A_LO, 0);
+    OCG.Gen(OCG.STZ, OCG.mDP, FP_A_HI, 0);
+    addFPFixup(FP_FLT); OCG.Gen(OCG.JSR, OCG.mAbs, 0, 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_A_LO, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r), 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_A_HI, 0);
+    incR;
+    OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r + 1), 0);
+    x.type := ORB.realType
+  END Float;
+
+  PROCEDURE Ord*(VAR x: Item);
+  BEGIN
+    IF (x.mode = ORB.Var) OR (x.mode = ORB.Par) OR (x.mode = RegI) OR (x.mode = Cond) THEN
+      load(x)
+    END
+  END Ord;
+
+  PROCEDURE Len*(VAR x: Item);
+  BEGIN
+    IF x.type.len >= 0 THEN
+      IF x.mode = RegI THEN RH := RH - 1 END;
+      x.mode := ORB.Const; x.a := x.type.len
+    ELSE
+      Set16(TRUE, TRUE);
+      OCG.Gen(OCG.LDA, OCG.mSR, x.a + 4 + frame, 0);
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH), 0);
+      x.mode := Reg; x.r := RH; incR
+    END
+  END Len;
+
+  PROCEDURE Shift*(fct: LONGINT; VAR x, y: Item);
+    VAR op, i: LONGINT;
+  BEGIN
+    load(x);
+    IF fct = 0 THEN op := OCG.ASL
+    ELSIF fct = 1 THEN op := OCG.LSR
+    ELSE op := OCG.ROL
+    END;
+    IF y.mode = ORB.Const THEN
+      IF y.a = 1 THEN OCG.Gen(op, OCG.mDP, RegAddr(x.r), 0)
+      ELSE
+        OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(x.r), 0);
+        i := 0;
+        WHILE i < y.a DO OCG.Gen(op, OCG.mImpl, 0, 0); i := i + 1 END;
+        OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r), 0)
+      END
+    ELSE ORS.Mark("non-const shift not implemented")
+    END
+  END Shift;
+
+  PROCEDURE Bitwise*(fct: LONGINT; VAR x, y: Item);
+    VAR op: LONGINT;
+  BEGIN
+    load(x);
+    IF fct = 0 THEN op := OCG.AND
+    ELSIF fct = 1 THEN op := OCG.EOR
+    ELSE op := OCG.ORA
+    END;
+    IF y.mode = ORB.Const THEN
+      OCG.Gen(OCG.LDA, OCG.mImm, Lo16(y.a), 0);
+      OCG.Gen(op, OCG.mDP, RegAddr(x.r), 0);
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r), 0)
+    ELSE
+      load(y);
+      OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(y.r), 0);
+      OCG.Gen(op, OCG.mDP, RegAddr(x.r), 0);
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH - 2), 0);
+      RH := RH - 1; x.r := RH - 1
+    END
+  END Bitwise;
+
+  PROCEDURE UML*(VAR x, y: Item);
+  BEGIN load(x); load(y); RH := RH - 1
+  END UML;
+
+  PROCEDURE Bit*(VAR x, y: Item);
+    VAR loopTop: LONGINT;
+  BEGIN
+    load(x);
+    OCG.Gen(OCG.STZ, OCG.mDP, RegAddr(RH), 0);
+    incR;
+    x.mode := RegI; x.a := 0; x.type := ORB.intType;
+    load(x);
+    Set16(TRUE, TRUE);
+    IF y.mode = ORB.Const THEN
+      OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(x.r), 0);
+      OCG.Gen(OCG.AND, OCG.mImm, ASL(1, y.a), 0);
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r), 0);
+      RH := RH - 1
+    ELSE
+      load(y);
+      OCG.Gen(OCG.LDA, OCG.mImm, 1, 0);
+      OCG.Gen(OCG.LDX, OCG.mDP, RegAddr(y.r), 0);
+      OCG.Gen(OCG.BEQ, OCG.mPCR, OCG.Here() + 2 + 4, 0);
+      loopTop := OCG.Here();
+      OCG.Gen(OCG.ASL, OCG.mAcc, 0, 0);
+      OCG.Gen(OCG.DEX, OCG.mImpl, 0, 0);
+      OCG.Gen(OCG.BNE, OCG.mPCR, loopTop, 0);
+      OCG.Gen(OCG.AND, OCG.mDP, RegAddr(x.r), 0);
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r), 0);
+      RH := RH - 2
+    END;
+    SetCC(x, NE)
+  END Bit;
+
+  PROCEDURE HH*(VAR x: Item);
+  BEGIN x.mode := Reg; x.r := RH; incR
+  END HH;
+
+  PROCEDURE Adr*(VAR x: Item);
+  BEGIN
+    IF (x.mode = ORB.Var) OR (x.mode = ORB.Par) OR (x.mode = RegI) THEN
+      loadAdr(x); RH := RH - 1
+    ELSIF (x.mode = ORB.Const) & (x.type.form = ORB.Proc) THEN load(x)
+    ELSIF (x.mode = ORB.Const) & (x.type.form = ORB.String) THEN loadStringAdr(x)
+    ELSIF (x.mode = ORB.Const) &
+          ((x.type.form = ORB.Array) OR (x.type.form = ORB.Record)) THEN loadStringAdr(x)
+    ELSE ORS.Mark("not addressable")
+    END
+  END Adr;
+
+  PROCEDURE Bank*(VAR x: Item);
+  BEGIN
+    IF (x.mode = ORB.Var) OR (x.mode = ORB.Par) OR (x.mode = RegI) THEN
+      loadAdr(x); Set16(TRUE, TRUE);
+      OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(x.r + 1), 0);
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r), 0);
+      RH := RH - 1
+    ELSIF (x.mode = ORB.Const) &
+          ((x.type.form = ORB.Array) OR (x.type.form = ORB.Record) OR (x.type.form = ORB.String)) THEN
+      Set16(TRUE, TRUE);
+      OCG.Gen(OCG.LDA, OCG.mDP, BANK_DP, 0);
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH), 0);
+      x.mode := Reg; x.r := RH; incR
+    ELSE ORS.Mark("not addressable")
+    END
+  END Bank;
+
+  PROCEDURE Condition*(VAR x: Item);
+  BEGIN SetCC(x, x.a)
+  END Condition;
+
+  (* --- module management --- *)
+  PROCEDURE Open*(modid: ARRAY OF CHAR; v: INTEGER);
+    VAR i: INTEGER;
+  BEGIN
+    curModid := modid;
+    OCG.Init; OCG.SetPc(CodeOrg);
+    tdx := 0; strx := 0; RH := 0;
+    fixorgP := 0; fixorgD := 0; fixorgT := 0;
+    tdFixupC := 0;
+    FOR i := 0 TO FP_OPS - 1 DO fpFixupCount[i] := 0 END;
+    check := v # 0; version := v;
+    IF v = 0 THEN
+      OCG.SetPc(1);
+      WHILE OCG.Here() < 8 DO OCG.Patch(OCG.Here(), 0); OCG.SetPc(OCG.Here() + 1) END
+    END;
+    OCG.SetLongA(TRUE); OCG.SetLongI(TRUE)
+  END Open;
+
+  PROCEDURE SetDataSize*(dc: LONGINT);
+  BEGIN varsize := dc
+  END SetDataSize;
+
+  PROCEDURE Header*;
+  BEGIN
+    entry := OCG.Here();
+    OCG.SetLongA(TRUE); OCG.SetLongI(TRUE);
+    OCG.AddRel(OCG.Here());
+    OCG.Gen(OCG.LDA, OCG.mImm, 0, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, SB_DP, 0);
+    OCG.AddRel(OCG.Here() + 80000000H);
+    OCG.Gen(OCG.LDA, OCG.mImm, 0, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, BANK_DP, 0)
+  END Header;
+
+  PROCEDURE NofPtrs(typ: ORB.Type): LONGINT;
+    VAR fld: ORB.Object; n: LONGINT;
+  BEGIN
+    IF (typ.form = ORB.Pointer) OR (typ.form = ORB.NilTyp) THEN n := 1
+    ELSIF typ.form = ORB.Record THEN
+      fld := typ.dsc; n := 0;
+      WHILE fld # NIL DO n := NofPtrs(fld.type) + n; fld := fld.next END
+    ELSIF typ.form = ORB.Array THEN n := NofPtrs(typ.base) * typ.len
+    ELSE n := 0
+    END;
+    RETURN n
+  END NofPtrs;
+
+  (* --- .816 writer helpers --- *)
+  PROCEDURE Write4(VAR R: Files.Rider; v: LONGINT);
+  BEGIN
+    Files.WriteByte(R, v MOD 100H);
+    Files.WriteByte(R, v DIV 100H MOD 100H);
+    Files.WriteByte(R, v DIV 10000H MOD 100H);
+    Files.WriteByte(R, v DIV 1000000H MOD 100H)
+  END Write4;
+
+  PROCEDURE FindPtrs(VAR R: Files.Rider; typ: ORB.Type; adr: LONGINT);
+    VAR fld: ORB.Object; i, s: LONGINT;
+  BEGIN
+    IF (typ.form = ORB.Pointer) OR (typ.form = ORB.NilTyp) THEN
+      Write4(R, adr)
+    ELSIF typ.form = ORB.Record THEN
+      fld := typ.dsc;
+      WHILE fld # NIL DO FindPtrs(R, fld.type, fld.val + adr); fld := fld.next END
+    ELSIF typ.form = ORB.Array THEN
+      s := typ.base.size; i := 0;
+      WHILE i < typ.len DO FindPtrs(R, typ.base, i * s + adr); i := i + 1 END
+    END
+  END FindPtrs;
+
+  PROCEDURE emitFP_FLOOR;
+    VAR p1, p2, p3, loop, i: LONGINT;
+  BEGIN
+    fpSubAddr[FP_FLOOR] := OCG.Here();
+
+  (* Extract sign *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_A_HI, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 8000H, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_SIGN, 0);
+
+  (* Extract exponent = (FP_A_HI & 0x7F80) >> 7 *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_A_HI, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 7F80H, 0);
+  (* >>7: seven LSR A instructions *)
+    i := 0;
+    WHILE i < 7 DO OCG.Gen(OCG.LSR, OCG.mAcc, 0, 0); i := i + 1 END;
+    OCG.Gen(OCG.STA, OCG.mDP, FP_EXP, 0);
+
+  (* If exp == 0: subnormal or zero *)
+    p1 := emitFwdBranch(OCG.BNE);   (* BNE → has_exp *)
+  (* exp==0: positive→0, negative→-1 (unless -0.0→0) *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_SIGN, 0);
+    p2 := emitFwdBranch(OCG.BEQ);   (* BEQ → ret_zero *)
+  (* negative: check mantissa for -0.0 *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_A_LO, 0);
+    OCG.Gen(OCG.ORA, OCG.mDP, FP_A_HI, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 7FFFH, 0);
+    p3 := emitFwdBranch(OCG.BEQ);   (* BEQ → ret_zero *)
+    OCG.Gen(OCG.LDA, OCG.mImm, 0FFFFH, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_A_LO, 0);
+    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+  (* ret_zero: *)
+    patch(p2); patch(p3);
+    OCG.Gen(OCG.LDA, OCG.mImm, 0000H, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_A_LO, 0);
+    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+
+  (* has_exp: *)
+    patch(p1);
+  (* unbiased = exp - 127 *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_EXP, 0);
+    OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+    OCG.Gen(OCG.SBC, OCG.mImm, 127, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_EXP, 0);
+
+  (* If unbiased < 0: |val| < 1 → positive:0, negative:-1 *)
+    p1 := emitFwdBranch(OCG.BPL);   (* BPL → normal *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_SIGN, 0);
+    OCG.Gen(OCG.BNE, OCG.mPCR, OCG.Here() + 2 + 5, 0);   (* BNE → neg1 *)
+    OCG.Gen(OCG.LDA, OCG.mImm, 0000H, 0);
+    OCG.Gen(OCG.BRA, OCG.mPCR, OCG.Here() + 2 + 3, 0);   (* BRA → store *)
+    OCG.Gen(OCG.LDA, OCG.mImm, 0FFFFH, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_A_LO, 0);
+    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+    patch(p1);
+
+  (* If unbiased >= 15: clamp *)
+    OCG.Gen(OCG.CMP, OCG.mImm, 15, 0);
+    p1 := emitFwdBranch(OCG.BCC);   (* BCC → no_ovf *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_SIGN, 0);
+    OCG.Gen(OCG.BNE, OCG.mPCR, OCG.Here() + 2 + 5, 0);   (* BNE → neg_ovf *)
+    OCG.Gen(OCG.LDA, OCG.mImm, 7FFFH, 0);
+    OCG.Gen(OCG.BRA, OCG.mPCR, OCG.Here() + 2 + 3, 0);   (* BRA → st_ovf *)
+    OCG.Gen(OCG.LDA, OCG.mImm, 8000H, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_A_LO, 0);
+    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+    patch(p1);
+
+  (* Build 24-bit mantissa with implicit 1 *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_A_HI, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 007FH, 0);
+    OCG.Gen(OCG.ORA, OCG.mImm, 0080H, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_M1_HI, 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_A_LO, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_M1_LO, 0);
+
+  (* Track fractional bits for FLOOR rounding *)
+    OCG.Gen(OCG.STZ, OCG.mDP, FP_TEMP, 0);
+
+  (* shift_count = 23 - unbiased (always > 0 since unbiased < 15) *)
+    OCG.Gen(OCG.LDA, OCG.mImm, 23, 0);
+    OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+    OCG.Gen(OCG.SBC, OCG.mDP, FP_EXP, 0);
+    p1 := emitFwdBranch(OCG.BEQ);   (* BEQ → done_shift *)
+    OCG.Gen(OCG.STA, OCG.mDP, FP_CNT, 0);
+
+    loop := OCG.Here();
+    OCG.Gen(OCG.LSR, OCG.mDP, FP_M1_HI, 0);
+    OCG.Gen(OCG.ROR, OCG.mDP, FP_M1_LO, 0);
+    OCG.Gen(OCG.BCC, OCG.mPCR, OCG.Here() + 2 + 2, 0);   (* BCC +2 *)
+    OCG.Gen(OCG.INC, OCG.mDP, FP_TEMP, 0);
+    OCG.Gen(OCG.DEC, OCG.mDP, FP_CNT, 0);
+    OCG.Gen(OCG.BNE, OCG.mPCR, loop, 0);
+    patch(p1);   (* done_shift *)
+
+  (* Result in FP_M1_LO. Apply sign. *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_SIGN, 0);
+    p1 := emitFwdBranch(OCG.BNE);   (* BNE → negative *)
+  (* positive: store directly *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_M1_LO, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_A_LO, 0);
+    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+
+  (* negative: negate magnitude; if fractional bits, add 1 before negate *)
+    patch(p1);
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_TEMP, 0);
+    OCG.Gen(OCG.BEQ, OCG.mPCR, OCG.Here() + 2 + 4, 0);   (* BEQ +4 (no fraction) *)
+    OCG.Gen(OCG.INC, OCG.mDP, FP_M1_LO, 0);
+    OCG.Gen(OCG.BRA, OCG.mPCR, OCG.Here() + 2, 0);   (* BRA +0 (→ negate) *)
+  (* negate: two's complement *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_M1_LO, 0);
+    OCG.Gen(OCG.EOR, OCG.mImm, 0FFFFH, 0);
+    OCG.Gen(OCG.INC, OCG.mAcc, 0, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_A_LO, 0);
+    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+  END emitFP_FLOOR;
+
+  (* --- FLT: signed 16-bit integer → IEEE 754 single --- *)
+
+  PROCEDURE emitFP_FLT;
+    VAR p1, loop: LONGINT;
+  BEGIN
+    fpSubAddr[FP_FLT] := OCG.Here();
+
+  (* Input in FP_A_LO (16-bit signed integer) *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_A_LO, 0);
+
+  (* If zero, return +0.0 *)
+    p1 := emitFwdBranch(OCG.BNE);   (* BNE → nonzero *)
+    OCG.Gen(OCG.STZ, OCG.mDP, FP_A_HI, 0);
+    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+    patch(p1);
+
+  (* Save sign, take absolute value *)
+    OCG.Gen(OCG.STZ, OCG.mDP, FP_SIGN, 0);
+    p1 := emitFwdBranch(OCG.BPL);   (* BPL → positive *)
+    OCG.Gen(OCG.LDA, OCG.mImm, 8000H, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_SIGN, 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_A_LO, 0);
+    OCG.Gen(OCG.EOR, OCG.mImm, 0FFFFH, 0);
+    OCG.Gen(OCG.INC, OCG.mAcc, 0, 0);
+    OCG.Gen(OCG.BRA, OCG.mPCR, OCG.Here() + 2 + 2, 0);   (* BRA → store_abs *)
+    patch(p1);
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_A_LO, 0);
+  (* store_abs: *)
+    OCG.Gen(OCG.STA, OCG.mDP, FP_M1_LO, 0);
+    OCG.Gen(OCG.STZ, OCG.mDP, FP_M1_HI, 0);
+
+  (* Find highest bit: shift left until bit 15 is set, count shifts *)
+    OCG.Gen(OCG.LDA, OCG.mImm, 0, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_CNT, 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_M1_LO, 0);
+
+    loop := OCG.Here();
+    OCG.Gen(OCG.CMP, OCG.mImm, 8000H, 0);
+    p1 := emitFwdBranch(OCG.BCS);   (* BCS → found_msb *)
+    OCG.Gen(OCG.ASL, OCG.mAcc, 0, 0);
+    OCG.Gen(OCG.INC, OCG.mDP, FP_CNT, 0);
+    OCG.Gen(OCG.BRA, OCG.mPCR, loop, 0);
+    patch(p1);
+
+  (* A now has the value shifted so bit 15 is the MSB *)
+    OCG.Gen(OCG.STA, OCG.mDP, FP_TEMP, 0);
+  (* mantissa_lo = (TEMP & 0xFF) << 8 *)
+    OCG.Gen(OCG.AND, OCG.mImm, 00FFH, 0);
+    OCG.Gen(OCG.XBA, OCG.mImpl, 0, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_A_LO, 0);
+
+  (* mantissa_hi = (TEMP >> 8) & 0x7F *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_TEMP, 0);
+    OCG.Gen(OCG.XBA, OCG.mImpl, 0, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 007FH, 0);
+
+  (* exponent = 127 + 15 - shift_count *)
+    OCG.Gen(OCG.STA, OCG.mDP, FP_TEMP, 0);
+    OCG.Gen(OCG.LDA, OCG.mImm, 127 + 15, 0);
+    OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+    OCG.Gen(OCG.SBC, OCG.mDP, FP_CNT, 0);
+  (* Shift exp left 7: XBA (<<8) then LSR (>>1) = <<7 *)
+    OCG.Gen(OCG.XBA, OCG.mImpl, 0, 0);
+    OCG.Gen(OCG.LSR, OCG.mAcc, 0, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 7F80H, 0);
+    OCG.Gen(OCG.ORA, OCG.mDP, FP_TEMP, 0);
+    OCG.Gen(OCG.ORA, OCG.mDP, FP_SIGN, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_A_HI, 0);
+    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+  END emitFP_FLT;
+
+  (* --- FADD: IEEE 754 single addition --- *)
+  (* FP_A + FP_B → FP_A *)
+
+  PROCEDURE emitFP_ADD;
+    VAR p1, p2, p3, loop, i: LONGINT;
+  BEGIN
+    fpSubAddr[FP_ADD] := OCG.Here();
+
+  (* Unpack A: sign_a, exp_a, mant_a (24-bit with implicit 1) *)
+  (* Check for zero first *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_A_LO, 0);
+    OCG.Gen(OCG.ORA, OCG.mDP, FP_A_HI, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 7FFFH, 0);
+    p1 := emitFwdBranch(OCG.BNE);   (* BNE → a_nonzero *)
+  (* A is zero: return B *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_B_LO, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_A_LO, 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_B_HI, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_A_HI, 0);
+    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+    patch(p1);
+
+  (* Check B for zero *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_B_LO, 0);
+    OCG.Gen(OCG.ORA, OCG.mDP, FP_B_HI, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 7FFFH, 0);
+    p1 := emitFwdBranch(OCG.BNE);   (* BNE → b_nonzero *)
+    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+    patch(p1);
+
+  (* Extract sign_a *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_A_HI, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 8000H, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_SIGN, 0);
+
+  (* Extract exp_a *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_A_HI, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 7F80H, 0);
+    i := 0;
+    WHILE i < 7 DO OCG.Gen(OCG.LSR, OCG.mAcc, 0, 0); i := i + 1 END;
+    OCG.Gen(OCG.STA, OCG.mDP, FP_EXP, 0);
+
+  (* Extract mant_a (24-bit with implicit 1) *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_A_HI, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 007FH, 0);
+    OCG.Gen(OCG.ORA, OCG.mImm, 0080H, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_M1_HI, 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_A_LO, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_M1_LO, 0);
+
+  (* Extract sign_b *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_B_HI, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 8000H, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_TEMP2, 0);
+
+  (* Extract exp_b *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_B_HI, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 7F80H, 0);
+    i := 0;
+    WHILE i < 7 DO OCG.Gen(OCG.LSR, OCG.mAcc, 0, 0); i := i + 1 END;
+    OCG.Gen(OCG.STA, OCG.mDP, FP_TEMP, 0);
+
+  (* Extract mant_b *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_B_HI, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 007FH, 0);
+    OCG.Gen(OCG.ORA, OCG.mImm, 0080H, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_M2_HI, 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_B_LO, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_M2_LO, 0);
+
+  (* Compare exponents: ensure exp_a >= exp_b (swap if needed) *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_EXP, 0);
+    OCG.Gen(OCG.CMP, OCG.mDP, FP_TEMP, 0);
+    p1 := emitFwdBranch(OCG.BCS);   (* BCS → no_swap *)
+
+  (* Swap A and B (exp, mant, sign) *)
+  (* Swap exponents *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_EXP, 0);
+    OCG.Gen(OCG.LDX, OCG.mDP, FP_TEMP, 0);
+    OCG.Gen(OCG.STX, OCG.mDP, FP_EXP, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_TEMP, 0);
+  (* Swap mantissas *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_M1_LO, 0);
+    OCG.Gen(OCG.LDX, OCG.mDP, FP_M2_LO, 0);
+    OCG.Gen(OCG.STX, OCG.mDP, FP_M1_LO, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_M2_LO, 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_M1_HI, 0);
+    OCG.Gen(OCG.LDX, OCG.mDP, FP_M2_HI, 0);
+    OCG.Gen(OCG.STX, OCG.mDP, FP_M1_HI, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_M2_HI, 0);
+  (* Swap signs *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_SIGN, 0);
+    OCG.Gen(OCG.LDX, OCG.mDP, FP_TEMP2, 0);
+    OCG.Gen(OCG.STX, OCG.mDP, FP_SIGN, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_TEMP2, 0);
+    patch(p1);   (* no_swap *)
+
+  (* Align mantissas: shift M2 right by (exp_a - exp_b) *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_EXP, 0);
+    OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+    OCG.Gen(OCG.SBC, OCG.mDP, FP_TEMP, 0);
+    p1 := emitFwdBranch(OCG.BEQ);   (* BEQ → aligned (no shift needed) *)
+  (* If shift >= 24, M2 becomes zero *)
+    OCG.Gen(OCG.CMP, OCG.mImm, 24, 0);
+    p2 := emitFwdBranch(OCG.BCC);   (* BCC → do_shift *)
+    OCG.Gen(OCG.STZ, OCG.mDP, FP_M2_LO, 0);
+    OCG.Gen(OCG.STZ, OCG.mDP, FP_M2_HI, 0);
+    p3 := emitFwdBranch(OCG.BRA);   (* BRA → aligned *)
+    patch(p2);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_CNT, 0);
+    loop := OCG.Here();
+    OCG.Gen(OCG.LSR, OCG.mDP, FP_M2_HI, 0);
+    OCG.Gen(OCG.ROR, OCG.mDP, FP_M2_LO, 0);
+    OCG.Gen(OCG.DEC, OCG.mDP, FP_CNT, 0);
+    OCG.Gen(OCG.BNE, OCG.mPCR, loop, 0);
+    patch(p1); patch(p3);   (* aligned *)
+
+  (* Compare signs *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_SIGN, 0);
+    OCG.Gen(OCG.EOR, OCG.mDP, FP_TEMP2, 0);
+    p1 := emitFwdBranch(OCG.BNE);   (* BNE → diff_signs *)
+
+  (* Same signs: add mantissas *)
+    OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_M1_LO, 0);
+    OCG.Gen(OCG.ADC, OCG.mDP, FP_M2_LO, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_M1_LO, 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_M1_HI, 0);
+    OCG.Gen(OCG.ADC, OCG.mDP, FP_M2_HI, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_M1_HI, 0);
+  (* Check for mantissa overflow (bit 8 of M1_HI = bit 24 of 24-bit mantissa) *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_M1_HI, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 0100H, 0);
+    p2 := emitFwdBranch(OCG.BEQ);   (* BEQ → no_overflow *)
+  (* Shift right 1, increment exp *)
+    OCG.Gen(OCG.LSR, OCG.mDP, FP_M1_HI, 0);
+    OCG.Gen(OCG.ROR, OCG.mDP, FP_M1_LO, 0);
+    OCG.Gen(OCG.INC, OCG.mDP, FP_EXP, 0);
+    patch(p2);
+    p2 := emitFwdBranch(OCG.BRA);   (* BRA → pack *)
+    patch(p1);   (* diff_signs *)
+
+  (* Different signs: subtract smaller from larger (M1 >= M2 after exponent alignment) *)
+    OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_M1_LO, 0);
+    OCG.Gen(OCG.SBC, OCG.mDP, FP_M2_LO, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_M1_LO, 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_M1_HI, 0);
+    OCG.Gen(OCG.SBC, OCG.mDP, FP_M2_HI, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_M1_HI, 0);
+
+  (* Check if result is zero *)
+    OCG.Gen(OCG.ORA, OCG.mDP, FP_M1_LO, 0);
+    p3 := emitFwdBranch(OCG.BNE);   (* BNE → normalize *)
+  (* Result is zero *)
+    OCG.Gen(OCG.STZ, OCG.mDP, FP_A_LO, 0);
+    OCG.Gen(OCG.STZ, OCG.mDP, FP_A_HI, 0);
+    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+    patch(p3);
+
+  (* Normalize: shift left until bit 7 of M1_HI is set (bit 23 of mantissa) *)
+    loop := OCG.Here();
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_M1_HI, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 0080H, 0);
+    p3 := emitFwdBranch(OCG.BNE);   (* BNE → normalized (done) *)
+    OCG.Gen(OCG.ASL, OCG.mDP, FP_M1_LO, 0);
+    OCG.Gen(OCG.ROL, OCG.mDP, FP_M1_HI, 0);
+    OCG.Gen(OCG.DEC, OCG.mDP, FP_EXP, 0);
+    OCG.Gen(OCG.BRA, OCG.mPCR, loop, 0);
+    patch(p3);
+    patch(p2);   (* pack *)
+
+  (* Pack result: FP_A_HI = sign | (exp << 7) | (M1_HI & 0x7F) *)
+  (* FP_A_LO = M1_LO *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_EXP, 0);
+    OCG.Gen(OCG.XBA, OCG.mImpl, 0, 0);
+    OCG.Gen(OCG.LSR, OCG.mAcc, 0, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 7F80H, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_A_HI, 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_M1_HI, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 007FH, 0);
+    OCG.Gen(OCG.ORA, OCG.mDP, FP_A_HI, 0);
+    OCG.Gen(OCG.ORA, OCG.mDP, FP_SIGN, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_A_HI, 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_M1_LO, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_A_LO, 0);
+    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+  END emitFP_ADD;
+
+  (* --- FMUL: IEEE 754 single multiplication --- *)
+  (* FP_A * FP_B → FP_A *)
+
+  PROCEDURE emitFP_MUL;
+    VAR p1, p2, loop, i: LONGINT;
+  BEGIN
+    fpSubAddr[FP_MUL] := OCG.Here();
+
+  (* Check A for zero *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_A_LO, 0);
+    OCG.Gen(OCG.ORA, OCG.mDP, FP_A_HI, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 7FFFH, 0);
+    p1 := emitFwdBranch(OCG.BNE);   (* BNE → a_nz *)
+    OCG.Gen(OCG.STZ, OCG.mDP, FP_A_LO, 0);
+    OCG.Gen(OCG.STZ, OCG.mDP, FP_A_HI, 0);
+    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+    patch(p1);
+
+  (* Check B for zero *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_B_LO, 0);
+    OCG.Gen(OCG.ORA, OCG.mDP, FP_B_HI, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 7FFFH, 0);
+    p1 := emitFwdBranch(OCG.BNE);   (* BNE → b_nz *)
+    OCG.Gen(OCG.STZ, OCG.mDP, FP_A_LO, 0);
+    OCG.Gen(OCG.STZ, OCG.mDP, FP_A_HI, 0);
+    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+    patch(p1);
+
+  (* Result sign = sign_a XOR sign_b *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_A_HI, 0);
+    OCG.Gen(OCG.EOR, OCG.mDP, FP_B_HI, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 8000H, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_SIGN, 0);
+
+  (* Result exp = exp_a + exp_b - 127 *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_A_HI, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 7F80H, 0);
+    i := 0;
+    WHILE i < 7 DO OCG.Gen(OCG.LSR, OCG.mAcc, 0, 0); i := i + 1 END;
+    OCG.Gen(OCG.STA, OCG.mDP, FP_EXP, 0);
+
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_B_HI, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 7F80H, 0);
+    i := 0;
+    WHILE i < 7 DO OCG.Gen(OCG.LSR, OCG.mAcc, 0, 0); i := i + 1 END;
+    OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+    OCG.Gen(OCG.ADC, OCG.mDP, FP_EXP, 0);
+    OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+    OCG.Gen(OCG.SBC, OCG.mImm, 127, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_EXP, 0);
+
+  (* Extract mantissa A (24-bit) *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_A_HI, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 007FH, 0);
+    OCG.Gen(OCG.ORA, OCG.mImm, 0080H, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_M1_HI, 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_A_LO, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_M1_LO, 0);
+
+  (* Extract mantissa B (24-bit) *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_B_HI, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 007FH, 0);
+    OCG.Gen(OCG.ORA, OCG.mImm, 0080H, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_M2_HI, 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_B_LO, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_M2_LO, 0);
+
+  (* 24x24 multiply: shift-and-add into PROD2:PROD1:PROD0 (48-bit result) *)
+    OCG.Gen(OCG.STZ, OCG.mDP, FP_PROD0, 0);
+    OCG.Gen(OCG.STZ, OCG.mDP, FP_PROD1, 0);
+    OCG.Gen(OCG.STZ, OCG.mDP, FP_PROD2, 0);
+    OCG.Gen(OCG.LDA, OCG.mImm, 24, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_CNT, 0);
+
+    loop := OCG.Here();
+  (* Check LSB of M2 *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_M2_LO, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 0001H, 0);
+    p1 := emitFwdBranch(OCG.BEQ);   (* BEQ → no_add *)
+  (* Add M1 to PROD (48-bit add) *)
+    OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_PROD0, 0);
+    OCG.Gen(OCG.ADC, OCG.mDP, FP_M1_LO, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_PROD0, 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_PROD1, 0);
+    OCG.Gen(OCG.ADC, OCG.mDP, FP_M1_HI, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_PROD1, 0);
+    OCG.Gen(OCG.BCC, OCG.mPCR, OCG.Here() + 2 + 2, 0);   (* BCC +2 *)
+    OCG.Gen(OCG.INC, OCG.mDP, FP_PROD2, 0);
+    patch(p1);   (* no_add *)
+
+  (* Shift M2 right by 1 *)
+    OCG.Gen(OCG.LSR, OCG.mDP, FP_M2_HI, 0);
+    OCG.Gen(OCG.ROR, OCG.mDP, FP_M2_LO, 0);
+  (* Shift PROD right by 1 *)
+    OCG.Gen(OCG.LSR, OCG.mDP, FP_PROD2, 0);
+    OCG.Gen(OCG.ROR, OCG.mDP, FP_PROD1, 0);
+    OCG.Gen(OCG.ROR, OCG.mDP, FP_PROD0, 0);
+
+    OCG.Gen(OCG.DEC, OCG.mDP, FP_CNT, 0);
+    OCG.Gen(OCG.BNE, OCG.mPCR, loop, 0);
+
+  (* After 24 right-shifts, PROD = (M1 * M2) >> 24. *)
+  (* If PROD1 bit 7 set: mantissa at bit 23, need INC EXP *)
+  (* If PROD1 bit 7 clear: mantissa at bit 22, shift left 1 *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_PROD1, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 0080H, 0);
+    p1 := emitFwdBranch(OCG.BEQ);   (* BEQ → shift_up *)
+  (* PROD1 bit 7 set: product overflow, increment exponent *)
+    OCG.Gen(OCG.INC, OCG.mDP, FP_EXP, 0);
+    p2 := emitFwdBranch(OCG.BRA);   (* BRA → pack *)
+    patch(p1);   (* shift_up: *)
+    OCG.Gen(OCG.ASL, OCG.mDP, FP_PROD0, 0);
+    OCG.Gen(OCG.ROL, OCG.mDP, FP_PROD1, 0);
+    patch(p2);   (* pack: *)
+
+  (* Pack: FP_A_HI = sign | (exp << 7) | (PROD1 & 0x7F), FP_A_LO = PROD0 *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_EXP, 0);
+    OCG.Gen(OCG.XBA, OCG.mImpl, 0, 0);
+    OCG.Gen(OCG.LSR, OCG.mAcc, 0, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 7F80H, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_A_HI, 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_PROD1, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 007FH, 0);
+    OCG.Gen(OCG.ORA, OCG.mDP, FP_A_HI, 0);
+    OCG.Gen(OCG.ORA, OCG.mDP, FP_SIGN, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_A_HI, 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_PROD0, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_A_LO, 0);
+    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+  END emitFP_MUL;
+
+  (* --- FDIV: IEEE 754 single division --- *)
+  (* FP_A / FP_B → FP_A *)
+
+  PROCEDURE emitFP_DIV;
+    VAR p1, p2, loop, i: LONGINT;
+  BEGIN
+    fpSubAddr[FP_DIV] := OCG.Here();
+
+  (* Check B for zero → trap *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_B_LO, 0);
+    OCG.Gen(OCG.ORA, OCG.mDP, FP_B_HI, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 7FFFH, 0);
+    p1 := emitFwdBranch(OCG.BNE);   (* BNE → b_nz *)
+    OCG.Gen(OCG.BRK, OCG.mImm, 7, 0);   (* BRK #7 (division by zero trap) *)
+    patch(p1);
+
+  (* Check A for zero *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_A_LO, 0);
+    OCG.Gen(OCG.ORA, OCG.mDP, FP_A_HI, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 7FFFH, 0);
+    p1 := emitFwdBranch(OCG.BNE);   (* BNE → a_nz *)
+    OCG.Gen(OCG.STZ, OCG.mDP, FP_A_LO, 0);
+    OCG.Gen(OCG.STZ, OCG.mDP, FP_A_HI, 0);
+    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+    patch(p1);
+
+  (* Result sign = sign_a XOR sign_b *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_A_HI, 0);
+    OCG.Gen(OCG.EOR, OCG.mDP, FP_B_HI, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 8000H, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_SIGN, 0);
+
+  (* Result exp = exp_a - exp_b + 127 *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_A_HI, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 7F80H, 0);
+    i := 0;
+    WHILE i < 7 DO OCG.Gen(OCG.LSR, OCG.mAcc, 0, 0); i := i + 1 END;
+    OCG.Gen(OCG.STA, OCG.mDP, FP_EXP, 0);
+
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_B_HI, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 7F80H, 0);
+    i := 0;
+    WHILE i < 7 DO OCG.Gen(OCG.LSR, OCG.mAcc, 0, 0); i := i + 1 END;
+    OCG.Gen(OCG.STA, OCG.mDP, FP_TEMP, 0);
+
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_EXP, 0);
+    OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+    OCG.Gen(OCG.SBC, OCG.mDP, FP_TEMP, 0);
+    OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+    OCG.Gen(OCG.ADC, OCG.mImm, 127, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_EXP, 0);
+
+  (* Extract mantissa A (dividend) into M1 *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_A_HI, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 007FH, 0);
+    OCG.Gen(OCG.ORA, OCG.mImm, 0080H, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_M1_HI, 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_A_LO, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_M1_LO, 0);
+
+  (* Extract mantissa B (divisor) into M2 *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_B_HI, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 007FH, 0);
+    OCG.Gen(OCG.ORA, OCG.mImm, 0080H, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_M2_HI, 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_B_LO, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_M2_LO, 0);
+
+  (* Restoring division (SANE-style): compare first, ROL quotient, then shift *)
+    OCG.Gen(OCG.STZ, OCG.mDP, FP_PROD0, 0);
+    OCG.Gen(OCG.STZ, OCG.mDP, FP_PROD1, 0);
+    OCG.Gen(OCG.LDA, OCG.mImm, 24, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_CNT, 0);
+
+    loop := OCG.Here();
+  (* Step 1: Try subtract remainder - divisor *)
+    OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_M1_LO, 0);
+    OCG.Gen(OCG.SBC, OCG.mDP, FP_M2_LO, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_TEMP, 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_M1_HI, 0);
+    OCG.Gen(OCG.SBC, OCG.mDP, FP_M2_HI, 0);
+  (* If borrow (C=0): remainder < divisor *)
+    p1 := emitFwdBranch(OCG.BCC);   (* BCC → no_sub *)
+  (* No borrow (C=1): commit subtraction *)
+    OCG.Gen(OCG.STA, OCG.mDP, FP_M1_HI, 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_TEMP, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_M1_LO, 0);
+    patch(p1);   (* no_sub: C=0 if skipped, C=1 if subtracted *)
+
+  (* Step 2: Shift carry into quotient (1=subtracted, 0=not) *)
+    OCG.Gen(OCG.ROL, OCG.mDP, FP_PROD0, 0);
+    OCG.Gen(OCG.ROL, OCG.mDP, FP_PROD1, 0);
+
+  (* Step 3: Shift remainder left for next iteration *)
+    OCG.Gen(OCG.ASL, OCG.mDP, FP_M1_LO, 0);
+    OCG.Gen(OCG.ROL, OCG.mDP, FP_M1_HI, 0);
+
+    OCG.Gen(OCG.DEC, OCG.mDP, FP_CNT, 0);
+    OCG.Gen(OCG.BNE, OCG.mPCR, loop, 0);
+
+  (* Quotient in PROD1:PROD0 (24-bit). Normalize if needed. *)
+  (* Check bit 23 (PROD1 bit 7) *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_PROD1, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 0080H, 0);
+    p1 := emitFwdBranch(OCG.BNE);   (* BNE → pack *)
+
+  (* Normalize: shift left until bit 23 set *)
+    loop := OCG.Here();
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_PROD1, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 0080H, 0);
+    p2 := emitFwdBranch(OCG.BNE);   (* BNE → pack2 *)
+    OCG.Gen(OCG.ASL, OCG.mDP, FP_PROD0, 0);
+    OCG.Gen(OCG.ROL, OCG.mDP, FP_PROD1, 0);
+    OCG.Gen(OCG.DEC, OCG.mDP, FP_EXP, 0);
+    OCG.Gen(OCG.BRA, OCG.mPCR, loop, 0);
+    patch(p1); patch(p2);
+
+  (* Pack result *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_EXP, 0);
+    OCG.Gen(OCG.XBA, OCG.mImpl, 0, 0);
+    OCG.Gen(OCG.LSR, OCG.mAcc, 0, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 7F80H, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_A_HI, 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_PROD1, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 007FH, 0);
+    OCG.Gen(OCG.ORA, OCG.mDP, FP_A_HI, 0);
+    OCG.Gen(OCG.ORA, OCG.mDP, FP_SIGN, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_A_HI, 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_PROD0, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_A_LO, 0);
+    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+  END emitFP_DIV;
+
+  (* --- FCMP: IEEE 754 single comparison → -1/0/+1 in FP_A_LO --- *)
+
+  PROCEDURE emitFP_CMP;
+    VAR p1, p2: LONGINT;
+  BEGIN
+    fpSubAddr[FP_CMP] := OCG.Here();
+
+  (* Both zero check *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_A_LO, 0);
+    OCG.Gen(OCG.ORA, OCG.mDP, FP_A_HI, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 7FFFH, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_TEMP, 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_B_LO, 0);
+    OCG.Gen(OCG.ORA, OCG.mDP, FP_B_HI, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 7FFFH, 0);
+    OCG.Gen(OCG.ORA, OCG.mDP, FP_TEMP, 0);
+    p1 := emitFwdBranch(OCG.BNE);   (* BNE → not_both_zero *)
+    OCG.Gen(OCG.LDA, OCG.mImm, 0, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_A_LO, 0);
+    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+    patch(p1);
+
+  (* Sign comparison *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_A_HI, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 8000H, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_SIGN, 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_B_HI, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 8000H, 0);
+    OCG.Gen(OCG.CMP, OCG.mDP, FP_SIGN, 0);
+    p1 := emitFwdBranch(OCG.BEQ);   (* BEQ → same_sign *)
+
+  (* Different signs *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_SIGN, 0);
+    OCG.Gen(OCG.BNE, OCG.mPCR, OCG.Here() + 2 + 5, 0);   (* BNE → a is neg *)
+    OCG.Gen(OCG.LDA, OCG.mImm, 1, 0);
+    OCG.Gen(OCG.BRA, OCG.mPCR, OCG.Here() + 2 + 3, 0);
+    OCG.Gen(OCG.LDA, OCG.mImm, 0FFFFH, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_A_LO, 0);
+    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+    patch(p1);
+
+  (* Same sign: compare hi magnitude *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_A_HI, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 7FFFH, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_TEMP, 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_B_HI, 0);
+    OCG.Gen(OCG.AND, OCG.mImm, 7FFFH, 0);
+    OCG.Gen(OCG.CMP, OCG.mDP, FP_TEMP, 0);
+    p1 := emitFwdBranch(OCG.BEQ);   (* BEQ → hi_equal *)
+
+  (* Hi words differ: B < A means A > B (for positive) *)
+    p2 := emitFwdBranch(OCG.BCC);   (* BCC → B < A (carry clear) *)
+  (* B > A *)
+    OCG.Gen(OCG.LDA, OCG.mImm, 0FFFFH, 0);
+    OCG.Gen(OCG.BRA, OCG.mPCR, OCG.Here() + 2 + 3, 0);
+    patch(p2);
+    OCG.Gen(OCG.LDA, OCG.mImm, 1, 0);
+  (* If negative, reverse *)
+    OCG.Gen(OCG.BIT, OCG.mDP, FP_SIGN, 0);
+    p2 := emitFwdBranch(OCG.BPL);   (* BPL → store (positive, no reverse) *)
+  (* Negate result *)
+    OCG.Gen(OCG.EOR, OCG.mImm, 0FFFFH, 0);
+    OCG.Gen(OCG.INC, OCG.mAcc, 0, 0);
+    patch(p2);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_A_LO, 0);
+    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+    patch(p1);   (* hi_equal *)
+
+  (* Compare lo words *)
+    OCG.Gen(OCG.LDA, OCG.mDP, FP_A_LO, 0);
+    OCG.Gen(OCG.CMP, OCG.mDP, FP_B_LO, 0);
+    p1 := emitFwdBranch(OCG.BEQ);   (* BEQ → equal *)
+    p2 := emitFwdBranch(OCG.BCC);   (* BCC → A < B *)
+  (* A > B *)
+    OCG.Gen(OCG.LDA, OCG.mImm, 1, 0);
+    OCG.Gen(OCG.BRA, OCG.mPCR, OCG.Here() + 2 + 3, 0);
+    patch(p2);
+  (* A < B *)
+    OCG.Gen(OCG.LDA, OCG.mImm, 0FFFFH, 0);
+  (* If negative, reverse *)
+    OCG.Gen(OCG.BIT, OCG.mDP, FP_SIGN, 0);
+    p2 := emitFwdBranch(OCG.BPL);   (* BPL → store *)
+    OCG.Gen(OCG.EOR, OCG.mImm, 0FFFFH, 0);
+    OCG.Gen(OCG.INC, OCG.mAcc, 0, 0);
+    patch(p2);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_A_LO, 0);
+    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+    patch(p1);   (* equal *)
+    OCG.Gen(OCG.LDA, OCG.mImm, 0, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, FP_A_LO, 0);
+    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+  END emitFP_CMP;
+
+
+  PROCEDURE emitFPSubroutines;
+  BEGIN
+    IF fpFixupCount[FP_FLOOR] > 0 THEN emitFP_FLOOR END;
+    IF fpFixupCount[FP_FLT] > 0 THEN emitFP_FLT END;
+    IF fpFixupCount[FP_ADD] > 0 THEN emitFP_ADD END;
+    IF fpFixupCount[FP_MUL] > 0 THEN emitFP_MUL END;
+    IF fpFixupCount[FP_DIV] > 0 THEN emitFP_DIV END;
+    IF fpFixupCount[FP_CMP] > 0 THEN emitFP_CMP END
+  END emitFPSubroutines;
+
+  PROCEDURE fixupFPCalls;
+    VAR op, i, pos, addr: LONGINT;
+  BEGIN
+    op := 0;
+    WHILE op < FP_OPS DO
+      i := 0;
+      WHILE i < fpFixupCount[op] DO
+        pos := fpFixups[op, i] - CodeOrg;
+        addr := fpSubAddr[op];
+        OCG.Patch(pos, addr MOD 100H);
+        OCG.Patch(pos + 1, addr DIV 100H MOD 100H);
+        i := i + 1
+      END;
+      op := op + 1
+    END
+  END fixupFPCalls;
+
+  PROCEDURE Close*(modid: ARRAY OF CHAR; key: LONGINT; nofent: LONGINT);
+    VAR obj: ORB.Object; i, comsize, nofimps, nofptrs, size: LONGINT;
+      name: ARRAY 256 OF CHAR; F: Files.File; R: Files.Rider;
+  BEGIN
+    (* Exit: emulator calls main with JSL, return with RTL *)
+    OCG.Gen(OCG.RTL, OCG.mImpl, 0, 0);
+    emitFPSubroutines; fixupFPCalls;
+
+    obj := ORB.topScope.next;
+    nofimps := 0; comsize := 4; nofptrs := 0;
+    WHILE obj # NIL DO
+      IF (obj.class = ORB.Mod) & (obj.dsc # ORB.systemScope) THEN
+        nofimps := nofimps + 1
+      ELSIF (obj.exno # 0) & (obj.class = ORB.Const) &
+            (obj.type.form = ORB.Proc) & (obj.type.nofpar = 0) &
+            (obj.type.base = ORB.noType) THEN
+        i := 0; WHILE obj.name[i] # 0X DO i := i + 1 END;
+        i := (i + 4) DIV 4 * 4;
+        comsize := comsize + i + 4
+      ELSIF obj.class = ORB.Var THEN
+        nofptrs := nofptrs + NofPtrs(obj.type)
+      END;
+      obj := obj.next
+    END;
+
+    size := varsize + strx + comsize + (OCG.Here() + nofimps + nofent + nofptrs + 1) * 4;
+
+    i := 0; WHILE modid[i] # 0X DO name[i] := modid[i]; i := i + 1 END;
+    name[i] := "."; name[i + 1] := "8"; name[i + 2] := "1"; name[i + 3] := "6";
+    name[i + 4] := 0X;
+    F := Files.New(name);
+    Files.Set(R, F, 0);
+    Files.WriteString(R, modid);
+    Write4(R, key);
+    Files.WriteByte(R, version MOD 100H);
+    Write4(R, size);
+
+    obj := ORB.topScope.next;
+    WHILE (obj # NIL) & (obj.class = ORB.Mod) DO
+      IF obj.dsc # ORB.systemScope THEN
+        Files.WriteString(R, obj(ORB.Module).orgname);
+        Write4(R, obj.val)
+      END;
+      obj := obj.next
+    END;
+    Files.WriteByte(R, 0);
+
+    Write4(R, tdx * 2);
+    i := 0;
+    WHILE i < tdx DO
+      Files.WriteByte(R, data[i] MOD 100H);
+      Files.WriteByte(R, data[i] DIV 100H MOD 100H);
+      i := i + 1
+    END;
+
+    Write4(R, varsize - tdx * 2);
+    Write4(R, strx);
+    i := 0; WHILE i < strx DO Files.WriteByte(R, str[i] MOD 100H); i := i + 1 END;
+
+    Write4(R, OCG.Here() - CodeOrg);
+    i := 0;
+    WHILE i < OCG.Here() - CodeOrg DO
+      Files.WriteByte(R, OCG.Get(i) MOD 100H); i := i + 1
+    END;
+
+    obj := ORB.topScope.next;
+    WHILE obj # NIL DO
+      IF (obj.exno # 0) & (obj.class = ORB.Const) &
+         (obj.type.form = ORB.Proc) & (obj.type.nofpar = 0) &
+         (obj.type.base = ORB.noType) THEN
+        Files.WriteString(R, obj.name);
+        Write4(R, obj.val)
+      END;
+      obj := obj.next
+    END;
+    Files.WriteByte(R, 0);
+
+    Write4(R, nofent);
+    Write4(R, entry);
+
+    obj := ORB.topScope.next;
+    WHILE obj # NIL DO
+      IF obj.exno # 0 THEN
+        IF ((obj.class = ORB.Const) & (obj.type.form = ORB.Proc)) OR
+           (obj.class = ORB.Var) THEN
+          Write4(R, obj.val)
+        ELSIF (obj.class = ORB.Const) &
+              ((obj.type.form = ORB.Array) OR (obj.type.form = ORB.Record)) THEN
+          Write4(R, varsize + obj.val)
+        ELSIF obj.class = ORB.Typ THEN
+          IF obj.type.form = ORB.Record THEN
+            Write4(R, obj.type.len MOD 10000H)
+          ELSIF (obj.type.form = ORB.Pointer) &
+                ((obj.type.base.typobj = NIL) OR (obj.type.base.typobj.exno = 0)) THEN
+            Write4(R, obj.type.base.len MOD 10000H)
+          END
+        END
+      END;
+      obj := obj.next
+    END;
+
+    obj := ORB.topScope.next;
+    WHILE obj # NIL DO
+      IF obj.class = ORB.Var THEN FindPtrs(R, obj.type, obj.val) END;
+      obj := obj.next
+    END;
+
+    Write4(R, -1);
+    Write4(R, fixorgP);
+    Write4(R, fixorgD);
+    Write4(R, fixorgT);
+
+    Write4(R, tdFixupC);
+    i := 0;
+    WHILE i < tdFixupC DO
+      Files.WriteByte(R, tdFixupOff[i] MOD 100H);
+      Files.WriteByte(R, tdFixupOff[i] DIV 100H MOD 100H);
+      Files.WriteByte(R, tdFixupMno[i] MOD 100H);
+      Files.WriteByte(R, tdFixupMno[i] DIV 100H MOD 100H);
+      i := i + 1
+    END;
+
+    Write4(R, OCG.RelCount());
+    i := 0;
+    WHILE i < OCG.RelCount() DO Write4(R, OCG.Rel(i)); i := i + 1 END;
+
+    Write4(R, entry);
+    Files.WriteByte(R, ORD("O"));
+    Files.Register(F)
+  END Close;
+
+  (* --- SYSTEM pseudo-module registration (816 set) --- *)
+  PROCEDURE InitSystem*;
+  BEGIN
+    ORB.SysFunc("BANK", ORB.intType, 211);
+    ORB.SysFunc("H", ORB.intType, 201);
+    ORB.SysFunc("COND", ORB.boolType, 191);
+    ORB.SysFunc("SIZE", ORB.intType, 181);
+    ORB.SysFunc("ADR", ORB.intType, 171);
+    ORB.SysFunc("VAL", ORB.intType, 162);
+    ORB.SysFunc("BIT", ORB.boolType, 142);
+    ORB.SysProc("EXEC", ORB.noType, 152);
+    ORB.SysProc("TSB", ORB.noType, 142);
+    ORB.SysProc("TRB", ORB.noType, 132);
+    ORB.SysProc("COPY", ORB.noType, 123);
+    ORB.SysProc("PUT", ORB.noType, 113);
+    ORB.SysProc("GET", ORB.noType, 103);
+    ORB.SysProc("INTEN", ORB.noType, 91)
+  END InitSystem;
+
+  (* --- statement-result / loop-bound hooks --- *)
+  PROCEDURE Discard*(VAR x: Item);
+  BEGIN  (* free the result register left by a function-call statement *)
+    IF x.mode = Reg THEN RH := x.r END
+  END Discard;
+
+  PROCEDURE Snapshot*(VAR x: Item);
+  BEGIN  (* no-op: FOR bound already materialised before the loop *)
+  END Snapshot;
+
+  (* --- OO / interface entry points: deferred to M4/M5 on this target --- *)
+  PROCEDURE MethodItem*(VAR x: Item; m: ORB.Object; direct: BOOLEAN);
+  BEGIN ORS.Mark("methods not implemented on 65C816 yet")
+  END MethodItem;
+
+  PROCEDURE InitItem*(VAR x: Item; m: ORB.Object; rec: ORB.Type);
+  BEGIN ORS.Mark("constructors not implemented on 65C816 yet")
+  END InitItem;
+
+  PROCEDURE IfaceMethodItem*(VAR x: Item; m: ORB.Object);
+  BEGIN ORS.Mark("interfaces not implemented on 65C816 yet")
+  END IfaceMethodItem;
+
+  PROCEDURE PtrToIface*(VAR x: Item; ift: ORB.Type);
+  BEGIN ORS.Mark("interfaces not implemented on 65C816 yet")
+  END PtrToIface;
+
+  PROCEDURE StoreIface*(VAR x, y: Item);
+  BEGIN ORS.Mark("interfaces not implemented on 65C816 yet")
+  END StoreIface;
+
+  PROCEDURE IfaceRelation*(op: INTEGER; VAR x, y: Item);
+  BEGIN ORS.Mark("interfaces not implemented on 65C816 yet")
+  END IfaceRelation;
+
+  PROCEDURE Init*;
+  BEGIN
+    relmap[0] := EQ; relmap[1] := NE; relmap[2] := LT;
+    relmap[3] := GE; relmap[4] := LE; relmap[5] := GT;
+    OCG.Init
+  END Init;
+
 END ORG.
