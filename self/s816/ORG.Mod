@@ -2119,6 +2119,9 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     frameSize := parblksize + locblksize;
     curFrameSize := frameSize; curExpo := proc.expo; curIntProc := intProc;
     forDepth := 0;
+    (* a method keeps its vtable slot in .val, so record its compiled entry
+       address in .backend for BuildTD/Close to wire into the vtable *)
+    IF proc.class = ORB.Meth THEN proc.backend := OCG.Here() END;
     IF ~intProc THEN
       IF frameSize >= 4000H THEN ORS.Mark("too many locals") END;
       Set16(TRUE, TRUE);
