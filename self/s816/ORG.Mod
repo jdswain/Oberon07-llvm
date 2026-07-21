@@ -259,7 +259,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       END
     ELSIF cond = LE THEN
       IF signed THEN
-        OCG.Gen(OCG.BEQ, OCG.mPCR, OCG.Here() + 2 + 4 + 4, 0);
+        OCG.Gen(OCG.BEQ, OCG.mPCR, OCG.Here() + 2 + 10, 0);
         OCG.Gen(OCG.BVS, OCG.mPCR, OCG.Here() + 2 + 4, 0);
         OCG.Gen(OCG.BMI, OCG.mPCR, OCG.Here() + 2 + 6, 0);
         OCG.Gen(OCG.BRA, OCG.mPCR, OCG.Here() + 2 + 7, 0);
@@ -267,13 +267,13 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         OCG.Gen(OCG.BRA, OCG.mPCR, OCG.Here() + 2 + 3, 0);
         OCG.Gen(OCG.BRL, mode, target, 0)
       ELSE
-        OCG.Gen(OCG.BEQ, OCG.mPCR, OCG.Here() + 2 + 3 + 3, 0);
-        OCG.Gen(OCG.BCC, OCG.mPCR, OCG.Here() + 2 + 3, 0);
+        OCG.Gen(OCG.BEQ, OCG.mPCR, OCG.Here() + 2 + 2, 0);
+        OCG.Gen(OCG.BCS, OCG.mPCR, OCG.Here() + 2 + 3, 0);
         OCG.Gen(OCG.BRL, mode, target, 0)
       END
     ELSIF cond = GT THEN
       IF signed THEN
-        OCG.Gen(OCG.BEQ, OCG.mPCR, OCG.Here() + 2 + 4 + 3, 0);
+        OCG.Gen(OCG.BEQ, OCG.mPCR, OCG.Here() + 2 + 13, 0);
         OCG.Gen(OCG.BVS, OCG.mPCR, OCG.Here() + 2 + 4, 0);
         OCG.Gen(OCG.BPL, OCG.mPCR, OCG.Here() + 2 + 6, 0);
         OCG.Gen(OCG.BRA, OCG.mPCR, OCG.Here() + 2 + 7, 0);
@@ -281,8 +281,9 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         OCG.Gen(OCG.BRA, OCG.mPCR, OCG.Here() + 2 + 3, 0);
         OCG.Gen(OCG.BRL, mode, target, 0)
       ELSE
-        OCG.Gen(OCG.BEQ, OCG.mPCR, OCG.Here() + 2 + 3, 0);
-        OCG.Gen(OCG.BCS, OCG.mPCR, OCG.Here() + 2 + 3 + 3, 0);
+        OCG.Gen(OCG.BEQ, OCG.mPCR, OCG.Here() + 2 + 4, 0);
+        OCG.Gen(OCG.BCC, OCG.mPCR, OCG.Here() + 2 + 2, 0);
+        OCG.Gen(OCG.BRA, OCG.mPCR, OCG.Here() + 2 + 3, 0);
         OCG.Gen(OCG.BRL, mode, target, 0)
       END
     ELSIF cond = AL THEN

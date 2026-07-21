@@ -1243,11 +1243,11 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
          stay by-value (two-word fat pointer) *)
     END;
     IF (tp.form = ORB.Array) & (tp.len < 0) THEN
-      parsize := 2 * WordSize   (* open array: pointer + length *)
+      parsize := ORG.PtrSize + WordSize   (* open array: pointer + length word *)
     ELSIF (cl = ORB.Par) & (tp.form = ORB.Record) THEN
-      parsize := 2 * WordSize   (* VAR record: pointer + type tag *)
+      parsize := 2 * ORG.PtrSize          (* VAR record: data pointer + type-tag pointer *)
     ELSIF cl = ORB.Par THEN
-      parsize := WordSize
+      parsize := ORG.PtrSize              (* VAR / promoted value param: a pointer *)
     ELSE parsize := tp.size
     END;
     WHILE first # NIL DO
@@ -1313,7 +1313,7 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
       IF dim >= 1 THEN ORS.Mark("multi-dimensional open arrays not implemented") END;
       NEW(typ);
       typ.form := ORB.Array; typ.len := -1;
-      typ.size := 2 * WordSize;
+      typ.size := ORG.PtrSize + WordSize;   (* open-array descriptor: pointer + length word *)
       FormalType(typ.base, dim + 1)
     ELSIF sym = ORS.procedure THEN
       ORS.Get(sym);
