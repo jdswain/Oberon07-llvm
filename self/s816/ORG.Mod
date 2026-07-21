@@ -1597,4 +1597,506 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   BEGIN x.type := ORB.charType; x.a := str[x.a]
   END StrToChar;
 
+  PROCEDURE Store*(VAR x, y: Item);
+    VAR sb: LONGINT;
+  BEGIN
+    load(y);
+    IF x.mode = ORB.Var THEN
+      IF x.r > 0 THEN
+        IF (x.type.form = ORB.Pointer) OR (x.type.form = ORB.NilTyp)
+           OR (x.type.form = ORB.Real) OR (x.type.form = ORB.Proc) THEN
+          Set16(TRUE, TRUE);
+          OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(y.r), 0);
+          OCG.Gen(OCG.STA, OCG.mSR, x.a + frame, 0);
+          OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(y.r + 1), 0);
+          OCG.Gen(OCG.STA, OCG.mSR, x.a + 2 + frame, 0);
+          RH := RH - 1
+        ELSIF (x.type.size = 1) & (y.type.size >= 1) THEN
+          Set8(TRUE, FALSE);
+          OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(y.r), 0);
+          OCG.Gen(OCG.STA, OCG.mSR, x.a + frame, 0);
+          Set16(TRUE, FALSE)
+        ELSE
+          Set16(TRUE, FALSE);
+          OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(y.r), 0);
+          OCG.Gen(OCG.STA, OCG.mSR, x.a + frame, 0);
+          Set16(TRUE, FALSE)
+        END
+      ELSE
+        sb := GetSB(x.r);
+        IF (x.type.form = ORB.Pointer) OR (x.type.form = ORB.NilTyp)
+           OR (x.type.form = ORB.Real) OR (x.type.form = ORB.Proc) THEN
+          Set16(TRUE, TRUE);
+          OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(y.r), 0);
+          OCG.Gen(OCG.LDY, OCG.mImm, x.a, 0);
+          OCG.Gen(OCG.STA, OCG.mDPIndY, sb, 0);
+          OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(y.r + 1), 0);
+          OCG.Gen(OCG.LDY, OCG.mImm, x.a + 2, 0);
+          OCG.Gen(OCG.STA, OCG.mDPIndY, sb, 0);
+          RH := RH - 1
+        ELSIF (x.type.size = 1) & (y.type.size >= 1) THEN
+          Set8(TRUE, FALSE);
+          OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(y.r), 0);
+          OCG.Gen(OCG.LDY, OCG.mImm, x.a, 0);
+          OCG.Gen(OCG.STA, OCG.mDPIndY, sb, 0);
+          Set16(TRUE, FALSE)
+        ELSE
+          Set16(TRUE, TRUE);
+          OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(y.r), 0);
+          OCG.Gen(OCG.LDY, OCG.mImm, x.a, 0);
+          OCG.Gen(OCG.STA, OCG.mDPIndY, sb, 0)
+        END
+      END
+    ELSIF x.mode = ORB.Par THEN
+      Set16(TRUE, TRUE);
+      OCG.Gen(OCG.LDA, OCG.mSR, x.a + frame, 0);
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH), 0);
+      OCG.Gen(OCG.LDA, OCG.mSR, x.a + 2 + frame, 0);
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 1), 0);
+      IF (x.type.form = ORB.Pointer) OR (x.type.form = ORB.NilTyp)
+         OR (x.type.form = ORB.Real) OR (x.type.form = ORB.Proc) THEN
+        OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(y.r), 0);
+        OCG.Gen(OCG.LDY, OCG.mImm, x.b, 0);
+        OCG.Gen(OCG.STA, OCG.mDPIndLY, RegAddr(RH), 0);
+        OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(y.r + 1), 0);
+        OCG.Gen(OCG.LDY, OCG.mImm, x.b + 2, 0);
+        OCG.Gen(OCG.STA, OCG.mDPIndLY, RegAddr(RH), 0);
+        RH := RH - 1
+      ELSIF x.type.size = 1 THEN
+        Set8(TRUE, FALSE);
+        OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(y.r), 0);
+        IF x.b # 0 THEN
+          OCG.Gen(OCG.LDY, OCG.mImm, x.b, 0);
+          OCG.Gen(OCG.STA, OCG.mDPIndLY, RegAddr(RH), 0)
+        ELSE OCG.Gen(OCG.STA, OCG.mDPIndL, RegAddr(RH), 0)
+        END;
+        Set16(TRUE, FALSE)
+      ELSE
+        OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(y.r), 0);
+        IF x.b # 0 THEN
+          OCG.Gen(OCG.LDY, OCG.mImm, x.b, 0);
+          OCG.Gen(OCG.STA, OCG.mDPIndLY, RegAddr(RH), 0)
+        ELSE OCG.Gen(OCG.STA, OCG.mDPIndL, RegAddr(RH), 0)
+        END
+      END
+    ELSIF x.mode = RegI THEN
+      IF (x.type.form = ORB.Pointer) OR (x.type.form = ORB.NilTyp)
+         OR (x.type.form = ORB.Real) OR (x.type.form = ORB.Proc) THEN
+        Set16(TRUE, TRUE);
+        OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(y.r), 0);
+        IF x.a = 0 THEN OCG.Gen(OCG.STA, OCG.mDPIndL, RegAddr(x.r), 0)
+        ELSE
+          OCG.Gen(OCG.LDY, OCG.mImm, x.a, 0);
+          OCG.Gen(OCG.STA, OCG.mDPIndLY, RegAddr(x.r), 0)
+        END;
+        OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(y.r + 1), 0);
+        OCG.Gen(OCG.LDY, OCG.mImm, x.a + 2, 0);
+        OCG.Gen(OCG.STA, OCG.mDPIndLY, RegAddr(x.r), 0);
+        RH := RH - 1
+      ELSIF x.type.size = 1 THEN
+        Set8(TRUE, FALSE);
+        OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(y.r), 0);
+        IF x.a = 0 THEN OCG.Gen(OCG.STA, OCG.mDPIndL, RegAddr(x.r), 0)
+        ELSE
+          OCG.Gen(OCG.LDY, OCG.mImm, x.a, 0);
+          OCG.Gen(OCG.STA, OCG.mDPIndLY, RegAddr(x.r), 0)
+        END;
+        Set16(TRUE, FALSE)
+      ELSE
+        Set16(TRUE, TRUE);
+        OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(y.r), 0);
+        IF x.a = 0 THEN OCG.Gen(OCG.STA, OCG.mDPIndL, RegAddr(x.r), 0)
+        ELSE
+          OCG.Gen(OCG.LDY, OCG.mImm, x.a, 0);
+          OCG.Gen(OCG.STA, OCG.mDPIndLY, RegAddr(x.r), 0)
+        END
+      END;
+      RH := RH - 2
+    ELSE ORS.Mark("bad mode in Store")
+    END;
+    RH := RH - 1
+  END Store;
+
+  PROCEDURE StoreStruct*(VAR x, y: Item);
+    VAR s, wordCount, dstReg, srcReg, loopTop: LONGINT; valid: BOOLEAN;
+  BEGIN
+    IF y.type.size # 0 THEN
+      loadAdr(x); loadAdr(y);
+      dstReg := RegAddr(x.r); srcReg := RegAddr(y.r);
+      valid := TRUE; s := 0;
+      IF (x.type.form = ORB.Array) & (x.type.len > 0) THEN
+        IF y.type.len >= 0 THEN
+          IF x.type.size = y.type.size THEN s := y.type.size
+          ELSE ORS.Mark("different length/size, not implemented"); valid := FALSE
+          END
+        ELSE ORS.Mark("open array assignment not implemented"); valid := FALSE
+        END
+      ELSIF x.type.form = ORB.Record THEN s := x.type.size
+      ELSE ORS.Mark("inadmissible assignment"); valid := FALSE
+      END;
+      IF valid THEN
+        wordCount := (s + 1) DIV 2; Set16(TRUE, TRUE);
+        OCG.Gen(OCG.LDY, OCG.mImm, 0, 0);
+        OCG.Gen(OCG.LDX, OCG.mImm, wordCount, 0);
+        loopTop := OCG.Here();
+        OCG.Gen(OCG.LDA, OCG.mDPIndY, srcReg, 0);
+        OCG.Gen(OCG.STA, OCG.mDPIndY, dstReg, 0);
+        OCG.Gen(OCG.INY, OCG.mImpl, 0, 0);
+        OCG.Gen(OCG.INY, OCG.mImpl, 0, 0);
+        OCG.Gen(OCG.DEX, OCG.mImpl, 0, 0);
+        OCG.Gen(OCG.BNE, OCG.mPCR, loopTop, 0)
+      END
+    END;
+    RH := 0
+  END StoreStruct;
+
+  PROCEDURE CopyString*(VAR x, y: Item);
+    VAR len, loopStart: LONGINT;
+  BEGIN
+    loadAdr(x); len := x.type.len;
+    IF len >= 0 THEN
+      IF len < y.b THEN ORS.Mark("string too long") END
+    ELSIF check THEN Trap(LT, 3)
+    END;
+    loadStringAdr(y);
+    Set8(TRUE, FALSE); Set16(FALSE, TRUE);
+    OCG.Gen(OCG.LDY, OCG.mImm, 0, 0);
+    loopStart := OCG.Here();
+    OCG.Gen(OCG.LDA, OCG.mDPIndY, RegAddr(y.r), 0);
+    OCG.Gen(OCG.STA, OCG.mDPIndY, RegAddr(x.r), 0);
+    OCG.Gen(OCG.BEQ, OCG.mPCR, OCG.Here() + 2 + 3, 0);
+    OCG.Gen(OCG.INY, OCG.mImpl, 0, 0);
+    OCG.Gen(OCG.BRA, OCG.mPCR, loopStart, 0);
+    RH := RH - 3
+  END CopyString;
+
+  (* --- parameters --- *)
+  PROCEDURE OpenArrayParam*(VAR x: Item);
+  BEGIN
+    loadAdr(x);
+    IF x.type.len >= 0 THEN
+      Set16(TRUE, TRUE);
+      OCG.Gen(OCG.LDA, OCG.mImm, x.type.len, 0);
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r + 2), 0)
+    ELSE
+      Set16(TRUE, TRUE);
+      OCG.Gen(OCG.LDA, OCG.mSR, x.a + 2 + frame, 0);
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r + 2), 0)
+    END;
+    incR
+  END OpenArrayParam;
+
+  PROCEDURE VarParam*(VAR x: Item; ftype: ORB.Type);
+    VAR xmd, sb: LONGINT;
+  BEGIN
+    xmd := x.mode;
+    IF (x.mode = ORB.Var) & (x.r > 0) THEN
+      Set16(TRUE, TRUE);
+      OCG.Gen(OCG.TSC, OCG.mImpl, 0, 0);
+      OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+      OCG.Gen(OCG.ADC, OCG.mImm, x.a + frame, 0);
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH), 0);
+      x.r := RH; x.mode := Reg; incR;
+      OCG.Gen(OCG.LDA, OCG.mImm, 0, 0);
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH), 0);
+      incR
+    ELSIF (x.mode = ORB.Var) & (x.r <= 0) THEN
+      sb := GetSB(x.r);
+      Set16(TRUE, TRUE);
+      OCG.Gen(OCG.LDA, OCG.mDP, sb, 0);
+      IF x.a # 0 THEN
+        OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+        OCG.Gen(OCG.ADC, OCG.mImm, x.a, 0)
+      END;
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH), 0);
+      OCG.Gen(OCG.LDA, OCG.mImm, 0, 0);
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 1), 0);
+      x.r := RH; x.mode := Reg; incR; incR
+    ELSE loadAdr(x)
+    END;
+    IF (ftype.form = ORB.Array) & (ftype.len < 0) THEN
+      IF x.type.len >= 0 THEN
+        Set16(TRUE, TRUE);
+        OCG.Gen(OCG.LDA, OCG.mImm, x.type.len, 0);
+        OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r + 2), 0)
+      ELSE
+        Set16(TRUE, TRUE);
+        OCG.Gen(OCG.LDA, OCG.mSR, x.a + 4 + frame, 0);
+        OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r + 2), 0)
+      END;
+      incR
+    ELSIF ftype.form = ORB.Record THEN
+      Set16(TRUE, TRUE);
+      IF xmd = ORB.Par THEN
+        OCG.Gen(OCG.LDA, OCG.mSR, x.a + 4 + frame, 0);
+        OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r + 2), 0);
+        OCG.Gen(OCG.LDA, OCG.mSR, x.a + 6 + frame, 0);
+        OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r + 3), 0)
+      ELSE
+        sb := GetSB(-x.type.mno);
+        OCG.Gen(OCG.LDA, OCG.mDP, sb, 0);
+        OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+        OCG.Gen(OCG.ADC, OCG.mImm, x.type.len, 0);
+        OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r + 2), 0);
+        OCG.Gen(OCG.STZ, OCG.mDP, RegAddr(x.r + 3), 0)
+      END;
+      incR; incR
+    END
+  END VarParam;
+
+  PROCEDURE ValueParam*(VAR x: Item; ftype: ORB.Type);
+  BEGIN load(x)
+  END ValueParam;
+
+  PROCEDURE StringParam*(VAR x: Item);
+  BEGIN
+    Set16(TRUE, TRUE);
+    OCG.Gen(OCG.LDA, OCG.mDP, SB_DP, 0);
+    OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+    OCG.Gen(OCG.ADC, OCG.mImm, varsize + x.a, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH), 0);
+    OCG.Gen(OCG.STZ, OCG.mDP, RegAddr(RH + 1), 0);
+    x.mode := Reg; x.r := RH; incR; incR;
+    Set16(TRUE, TRUE);
+    OCG.Gen(OCG.LDA, OCG.mImm, x.b, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH), 0);
+    incR
+  END StringParam;
+
+  (* --- FOR --- *)
+  PROCEDURE For0*(VAR x, y: Item);
+  BEGIN load(y)
+  END For0;
+
+  PROCEDURE For1*(VAR x, y, z, w: Item; VAR L: LONGINT);
+    VAR useSigned: BOOLEAN;
+  BEGIN
+    useSigned := (y.type.form = ORB.Int) & (y.type.size = 2);
+    IF z.mode = ORB.Const THEN
+      load(y);
+      IF z.type.size = 1 THEN Set8(TRUE, FALSE) ELSE Set16(TRUE, TRUE) END;
+      IF useSigned THEN
+        OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(y.r), 0);
+        OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+        OCG.Gen(OCG.SBC, OCG.mImm, z.a, 0)
+      ELSE OCG.Gen(OCG.CMP, OCG.mImm, z.a, 0)
+      END
+    ELSE
+      load(y); load(z);
+      IF (y.type.size = 1) & (z.type.size = 1) THEN Set8(TRUE, FALSE)
+      ELSE Set16(TRUE, TRUE) END;
+      IF useSigned THEN
+        OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(y.r), 0);
+        OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+        OCG.Gen(OCG.SBC, OCG.mDP, RegAddr(z.r), 0)
+      ELSE
+        OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(y.r), 0);
+        OCG.Gen(OCG.CMP, OCG.mDP, RegAddr(z.r), 0)
+      END;
+      RH := RH - 1
+    END;
+    Set16(TRUE, FALSE);
+    IF w.a > 0 THEN emitBranch(GT, y.type, OCG.mFix, 0)
+    ELSIF w.a < 0 THEN emitBranch(LT, y.type, OCG.mFix, 0)
+    ELSE ORS.Mark("zero increment"); emitBranch(MI, y.type, OCG.mFix, 0)
+    END;
+    L := OCG.Here() - 2;
+    Store(x, y)
+  END For1;
+
+  PROCEDURE For2*(VAR x, y, w: Item);
+  BEGIN
+    load(x);
+    IF w.mode = ORB.Const THEN
+      IF w.a > 0 THEN
+        OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+        OCG.Gen(OCG.ADC, OCG.mImm, w.a, 0)
+      ELSE
+        OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+        OCG.Gen(OCG.SBC, OCG.mImm, -w.a, 0)
+      END
+    ELSE
+      load(w);
+      OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+      OCG.Gen(OCG.ADC, OCG.mDP, RegAddr(w.r), 0);
+      RH := RH - 1
+    END;
+    IF x.mode = ORB.Var THEN
+      OCG.Gen(OCG.LDY, OCG.mImm, x.a, 0);
+      OCG.Gen(OCG.STA, OCG.mDPIndY, SB_DP, 0)
+    ELSE OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r), 0)
+    END;
+    RH := RH - 1
+  END For2;
+
+  (* --- CASE --- *)
+  PROCEDURE CaseLabel*(VAR x: Item; val: LONGINT; VAR chain: LONGINT);
+  BEGIN
+    load(x); Set16(TRUE, TRUE);
+    OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(x.r), 0);
+    OCG.Gen(OCG.CMP, OCG.mImm, val, 0);
+    RH := RH - 1;
+    OCG.Gen(OCG.BNE, OCG.mPCR, OCG.Here() + 2 + 3, 0);
+    OCG.Gen(OCG.BRL, OCG.mFix, chain, 0);
+    chain := OCG.Here() - 2
+  END CaseLabel;
+
+  PROCEDURE CaseRange*(VAR x: Item; lo, hi: LONGINT; VAR chain: LONGINT);
+  BEGIN
+    load(x); Set16(TRUE, TRUE);
+    OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(x.r), 0);
+    RH := RH - 1;
+    OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+    OCG.Gen(OCG.SBC, OCG.mImm, lo, 0);
+    OCG.Gen(OCG.CMP, OCG.mImm, hi - lo + 1, 0);
+    OCG.Gen(OCG.BCS, OCG.mPCR, OCG.Here() + 2 + 3, 0);
+    OCG.Gen(OCG.BRL, OCG.mFix, chain, 0);
+    chain := OCG.Here() - 2
+  END CaseRange;
+
+  (* --- branches --- *)
+  PROCEDURE Here*(): LONGINT;
+  BEGIN RETURN OCG.Here()
+  END Here;
+
+  PROCEDURE FJump*(VAR L: LONGINT);
+  BEGIN
+    emitBranch(AL, ORB.intType, OCG.mFix, L);
+    L := OCG.Here() - 2
+  END FJump;
+
+  PROCEDURE CFJump*(VAR x: Item);
+  BEGIN
+    IF x.mode # Cond THEN loadCond(x) END;
+    emitBranch(negated(x.r), x.origType, OCG.mFix, x.a);
+    FixLink(x.b);
+    x.a := OCG.Here() - 2
+  END CFJump;
+
+  PROCEDURE BJump*(L: LONGINT);
+  BEGIN OCG.Gen(OCG.BRA, OCG.mPCR, L, 0)
+  END BJump;
+
+  PROCEDURE CBJump*(VAR x: Item; L: LONGINT);
+  BEGIN
+    IF x.mode # Cond THEN loadCond(x) END;
+    emitBranch(negated(x.r), x.origType, OCG.mPCR, L);
+    FixLink(x.b);
+    FixLinkWith(x.a, L)
+  END CBJump;
+
+  PROCEDURE Fixup*(VAR x: Item);
+  BEGIN FixLink(x.a)
+  END Fixup;
+
+  (* --- calls & procedure frame --- *)
+  PROCEDURE SaveRegs(r: LONGINT);
+    VAR ri: LONGINT;
+  BEGIN
+    ri := 0; Set16(TRUE, TRUE); frame := frame + 2 * r;
+    REPEAT
+      OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(ri), 0);
+      OCG.Gen(OCG.PHA, OCG.mImpl, 0, 0);
+      ri := ri + 1
+    UNTIL ri >= r
+  END SaveRegs;
+
+  PROCEDURE RestoreRegs(r: LONGINT);
+    VAR ri: LONGINT;
+  BEGIN
+    ri := r; Set16(TRUE, TRUE);
+    REPEAT
+      ri := ri - 1;
+      OCG.Gen(OCG.PLA, OCG.mImpl, 0, 0);
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(ri), 0)
+    UNTIL ri <= 0;
+    frame := frame - 2 * r
+  END RestoreRegs;
+
+  PROCEDURE PrepCall*(VAR x: Item; VAR r: LONGINT);
+  BEGIN
+    IF x.mode > ORB.Par THEN load(x) END;
+    r := RH;
+    IF RH > 0 THEN SaveRegs(RH); RH := 0 END
+  END PrepCall;
+
+  PROCEDURE Call*(VAR x: Item; r: LONGINT);
+    VAR mno, exno, encoded, addrReg, bankReg: LONGINT; wide: BOOLEAN;
+  BEGIN
+    Set16(TRUE, TRUE);
+    IF x.mode = ORB.Const THEN
+      IF x.r < 0 THEN
+        mno := -x.r; exno := x.a;
+        encoded := mno * 10000H + (exno MOD 10000H);
+        OCG.Gen(OCG.JSL, OCG.mAbsL, encoded, 0)
+      ELSIF x.b = 1 THEN
+        OCG.Gen(OCG.JSL, OCG.mAbsL, x.a, 0)
+      ELSE
+        OCG.Gen(OCG.JSR, OCG.mAbs, x.a, 0)
+      END
+    ELSE
+      IF x.mode <= ORB.Par THEN
+        load(x);
+        addrReg := RegAddr(RH - 2); bankReg := RegAddr(RH - 1);
+        IF check THEN
+          OCG.Gen(OCG.LDA, OCG.mDP, addrReg, 0);
+          OCG.Gen(OCG.ORA, OCG.mDP, bankReg, 0);
+          Trap(NE, 5)
+        END;
+        OCG.Gen(OCG.PHK, OCG.mImpl, 0, 0);
+        OCG.Gen(OCG.PER, OCG.mImm, 0BH, 0);
+        Set8(TRUE, FALSE);
+        OCG.Gen(OCG.LDA, OCG.mDP, bankReg, 0);
+        OCG.Gen(OCG.PHA, OCG.mImpl, 0, 0);
+        Set16(TRUE, FALSE);
+        OCG.Gen(OCG.LDA, OCG.mDP, addrReg, 0);
+        OCG.Gen(OCG.DEC, OCG.mAcc, 0, 0);
+        OCG.Gen(OCG.PHA, OCG.mImpl, 0, 0);
+        OCG.Gen(OCG.RTL, OCG.mImpl, 0, 0);
+        RH := RH - 2
+      ELSE
+        OCG.Gen(OCG.PLA, OCG.mImpl, 0, 0);
+        OCG.Gen(OCG.STA, OCG.mDP, RegAddr(1), 0);
+        OCG.Gen(OCG.PLA, OCG.mImpl, 0, 0);
+        OCG.Gen(OCG.STA, OCG.mDP, RegAddr(0), 0);
+        addrReg := RegAddr(0); bankReg := RegAddr(1);
+        r := r - 2; frame := frame - 4;
+        IF check THEN
+          OCG.Gen(OCG.LDA, OCG.mDP, addrReg, 0);
+          OCG.Gen(OCG.ORA, OCG.mDP, bankReg, 0);
+          Trap(NE, 5)
+        END;
+        OCG.Gen(OCG.PHK, OCG.mImpl, 0, 0);
+        OCG.Gen(OCG.PER, OCG.mImm, 0BH, 0);
+        Set8(TRUE, FALSE);
+        OCG.Gen(OCG.LDA, OCG.mDP, bankReg, 0);
+        OCG.Gen(OCG.PHA, OCG.mImpl, 0, 0);
+        Set16(TRUE, FALSE);
+        OCG.Gen(OCG.LDA, OCG.mDP, addrReg, 0);
+        OCG.Gen(OCG.DEC, OCG.mAcc, 0, 0);
+        OCG.Gen(OCG.PHA, OCG.mImpl, 0, 0);
+        OCG.Gen(OCG.RTL, OCG.mImpl, 0, 0)
+      END
+    END;
+    IF x.type.base.form = ORB.NoTyp THEN
+      IF r > 0 THEN RestoreRegs(r) END;
+      RH := r
+    ELSE
+      wide := (x.type.base.form = ORB.Pointer) OR (x.type.base.form = ORB.Real)
+              OR (x.type.base.form = ORB.Proc);
+      IF r > 0 THEN
+        Set16(TRUE, TRUE);
+        OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(0), 0);
+        OCG.Gen(OCG.STA, OCG.mDP, RegAddr(r), 0);
+        IF wide THEN
+          OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(1), 0);
+          OCG.Gen(OCG.STA, OCG.mDP, RegAddr(r + 1), 0)
+        END;
+        RestoreRegs(r)
+      END;
+      x.mode := Reg; x.r := r;
+      IF wide THEN RH := r + 2 ELSE RH := r + 1 END
+    END
+  END Call;
+
 END ORG.
