@@ -164,6 +164,8 @@ MODULE ORG; (* Interface to the LLVM code generator (DDR C-bridge module).
   BEGIN END For2;
   PROCEDURE Snapshot*(VAR x: Item);
   BEGIN END Snapshot;
+  PROCEDURE ForClose*;
+  BEGIN END ForClose;
 
   (* --- CASE --- *)
   PROCEDURE CaseLabel*(VAR x: Item; val: LONGINT; VAR chain: LONGINT);

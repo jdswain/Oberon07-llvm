@@ -47,6 +47,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     FP_ADD = 0; FP_MUL = 1; FP_DIV = 2; FP_CMP = 3;
     FP_FLOOR = 4; FP_FLT = 5; FP_OPS = 6;
     maxFPFixups = 64;
+    maxForNest = 8;        (* max nested FOR loops with a non-const limit *)
 
   TYPE
     Item* = RECORD
@@ -73,6 +74,8 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     fpFixupCount: ARRAY FP_OPS OF INTEGER;
     fpSubAddr: ARRAY FP_OPS OF LONGINT;
     curModid: ORS.Ident;
+    forDepth: LONGINT;                         (* current nested-FOR depth *)
+    forPushed: ARRAY maxForNest OF BOOLEAN;    (* did this FOR spill a limit? *)
     (* stashed at Enter for Return (shared ORP's Return(proc,x) lacks
        frame/expo/int; Enter and its Return never nest across another
        Enter, so single module vars suffice) *)
@@ -694,7 +697,8 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   END MakeStringItem;
 
   PROCEDURE MakeDataItem*(VAR x: Item; typ: ORB.Type; offset, size: LONGINT);
-  BEGIN x.mode := ORB.Const; x.type := typ; x.a := offset; x.b := size
+  BEGIN x.mode := ORB.Var; x.type := typ; x.a := offset; x.b := 0; x.r := 0;
+    x.rdo := TRUE; x.origType := typ
   END MakeDataItem;
 
   PROCEDURE StrOffset*(): LONGINT;
@@ -2114,6 +2118,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   BEGIN
     frameSize := parblksize + locblksize;
     curFrameSize := frameSize; curExpo := proc.expo; curIntProc := intProc;
+    forDepth := 0;
     IF ~intProc THEN
       IF frameSize >= 4000H THEN ORS.Mark("too many locals") END;
       Set16(TRUE, TRUE);
@@ -2732,7 +2737,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   BEGIN
     curModid := modid;
     OCG.Init; OCG.SetPc(CodeOrg);
-    tdx := 0; strx := 0; RH := 0;
+    tdx := 0; strx := 0; RH := 0; forDepth := 0;
     fixorgP := 0; fixorgD := 0; fixorgT := 0;
     tdFixupC := 0;
     FOR i := 0 TO FP_OPS - 1 DO fpFixupCount[i] := 0 END;
@@ -3717,8 +3722,40 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   END Discard;
 
   PROCEDURE Snapshot*(VAR x: Item);
-  BEGIN  (* no-op: FOR bound already materialised before the loop *)
+  BEGIN
+    (* The shared frontend evaluates the FOR limit once, before L0. On this
+       register machine the limit would be clobbered by the loop body (and
+       by any procedure it calls), so spill a non-const limit onto the
+       hardware stack. frame += 2 shifts all stack-relative accesses to
+       account for it; ForClose pops it at loop exit. Call-safe because the
+       push lives on the invocation's own stack. *)
+    IF forDepth < maxForNest THEN
+      IF x.mode # ORB.Const THEN
+        load(x);
+        Set16(TRUE, TRUE);
+        OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(x.r), 0);
+        OCG.Gen(OCG.PHA, OCG.mImpl, 0, 0);
+        RH := RH - 1; frame := frame + 2;
+        x.mode := ORB.Var; x.r := 1; x.a := 1 - frame;
+        forPushed[forDepth] := TRUE
+      ELSE forPushed[forDepth] := FALSE
+      END;
+      forDepth := forDepth + 1
+    ELSE ORS.Mark("FOR loops nested too deeply")
+    END
   END Snapshot;
+
+  PROCEDURE ForClose*;
+  BEGIN
+    IF forDepth > 0 THEN
+      forDepth := forDepth - 1;
+      IF forPushed[forDepth] THEN
+        Set16(TRUE, TRUE);
+        OCG.Gen(OCG.PLA, OCG.mImpl, 0, 0);   (* discard the spilled limit *)
+        frame := frame - 2
+      END
+    END
+  END ForClose;
 
   (* --- OO / interface entry points: deferred to M4/M5 on this target --- *)
   PROCEDURE MethodItem*(VAR x: Item; m: ORB.Object; direct: BOOLEAN);

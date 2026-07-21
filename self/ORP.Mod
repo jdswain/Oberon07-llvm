@@ -1040,6 +1040,7 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
             ORG.For2(x, y, w);
             ORG.BJump(L0);
             ORG.FixLink(L1);
+            ORG.ForClose;   (* release any limit the backend spilled at Snapshot *)
             obj.rdo := FALSE
           ELSE ORS.Mark(":= expected")
           END
