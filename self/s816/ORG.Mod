@@ -55,7 +55,16 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       type*: ORB.Type;
       a*, b*, r*: LONGINT;
       rdo*: BOOLEAN;
-      origType*: ORB.Type
+      origType*: ORB.Type;
+      (* backend-private OO state (shared ORP never reads these): the
+         receiver designator stashed by MethodItem/InitItem for PrepCall
+         to pass as param 0, and the dynamic-dispatch flag *)
+      isMeth*: BOOLEAN;
+      dynDisp*: BOOLEAN;          (* TRUE: dispatch via vtable slot methSlot *)
+      methSlot*: LONGINT;
+      rcvMode*, rcvA*, rcvB*, rcvR*: LONGINT;
+      rcvRdo*: BOOLEAN;
+      rcvType*: ORB.Type
     END;
 
   VAR
@@ -714,6 +723,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
 
   PROCEDURE MakeItem*(VAR x: Item; y: ORB.Object; curlev: LONGINT);
   BEGIN
+    x.isMeth := FALSE; x.dynDisp := FALSE;   (* clear stale OO state on reuse *)
     x.mode := y.class; x.type := y.type; x.a := y.val; x.rdo := y.rdo;
     IF y.class = ORB.Par THEN x.b := 0
     ELSIF (y.class = ORB.Const) & (y.type.form = ORB.String) THEN x.b := y.lev
@@ -2024,15 +2034,27 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   END RestoreRegs;
 
   PROCEDURE PrepCall*(VAR x: Item; VAR r: LONGINT);
+    VAR rcv: Item;
   BEGIN
     IF x.mode > ORB.Par THEN load(x) END;
     r := RH;
-    IF RH > 0 THEN SaveRegs(RH); RH := 0 END
+    IF RH > 0 THEN SaveRegs(RH); RH := 0 END;
+    IF x.isMeth THEN
+      (* pass the receiver as param 0 (ParamList skips it). Reconstruct the
+         stashed designator and hand it to VarParam, so a VAR-record receiver
+         goes as addr+bank+tag and a pointer receiver as its addr+bank. *)
+      rcv.mode := x.rcvMode; rcv.a := x.rcvA; rcv.b := x.rcvB; rcv.r := x.rcvR;
+      rcv.rdo := x.rcvRdo; rcv.type := x.rcvType; rcv.isMeth := FALSE;
+      IF rcv.type.form = ORB.Record THEN VarParam(rcv, rcv.type)
+      ELSE load(rcv)   (* pointer receiver: pass the pointer value *)
+      END
+    END
   END PrepCall;
 
   PROCEDURE Call*(VAR x: Item; r: LONGINT);
     VAR mno, exno, encoded, addrReg, bankReg: LONGINT; wide: BOOLEAN;
   BEGIN
+    IF x.dynDisp THEN ORS.Mark("pointer-receiver dynamic dispatch: pending M4a.2") END;
     Set16(TRUE, TRUE);
     IF x.mode = ORB.Const THEN
       IF x.r < 0 THEN
@@ -3762,7 +3784,21 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
 
   (* --- OO / interface entry points: deferred to M4/M5 on this target --- *)
   PROCEDURE MethodItem*(VAR x: Item; m: ORB.Object; direct: BOOLEAN);
-  BEGIN ORS.Mark("methods not implemented on 65C816 yet")
+  BEGIN
+    (* stash the receiver designator (current x) for PrepCall to pass as
+       param 0; then turn x into the callable. *)
+    x.rcvMode := x.mode; x.rcvA := x.a; x.rcvB := x.b; x.rcvR := x.r;
+    x.rcvRdo := x.rdo; x.rcvType := x.type;
+    x.isMeth := TRUE; x.type := m.type;
+    IF direct THEN
+      x.dynDisp := FALSE;
+      x.mode := ORB.Const; x.a := m.backend; x.r := 0;
+      (* exported methods return via RTL (like exported procs), so they must
+         be reached with JSL even locally; non-exported use JSR/RTS *)
+      IF m.expo THEN x.b := 1 ELSE x.b := 0 END
+    ELSE
+      x.dynDisp := TRUE; x.methSlot := m.val; x.mode := ORB.Const
+    END
   END MethodItem;
 
   PROCEDURE InitItem*(VAR x: Item; m: ORB.Object; rec: ORB.Type);

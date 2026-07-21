@@ -1828,8 +1828,8 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
         type.mthd := TRUE;
         ORB.NewObj(rp, rcvname, rcvcl);
         rp.type := rcvtyp; rp.lev := level; rp.rdo := FALSE; rp.val := 1;
-        IF rcvcl = ORB.Par THEN parblksize := parblksize + 2 * WordSize
-        ELSE parblksize := parblksize + WordSize
+        IF rcvcl = ORB.Par THEN parblksize := parblksize + 2 * ORG.PtrSize
+        ELSE parblksize := parblksize + ORG.PtrSize
         END;
         IF rec # NIL THEN
           CurRcv := rp; CurRcvRec := rec; CurIsInit := isInit
