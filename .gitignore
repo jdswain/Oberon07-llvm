@@ -68,6 +68,8 @@ self/*/oc816
 # generated C bridge + copied-in shared frontend masters
 self/*/ORG_rt.c
 self/*/main.c
+# ...but the 816 driver is hand-written source, not generated:
+!self/s816/main.c
 self/llvm/ORS.Mod
 self/llvm/ORB.Mod
 self/llvm/ORP.Mod
