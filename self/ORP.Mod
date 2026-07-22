@@ -1813,7 +1813,9 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
       type.form := ORB.Proc; type.size := 4;
       proc.type := type; proc.val := -1; proc.lev := level;
       CheckExport(proc.expo);
-      IF proc.expo & ~hasRcv THEN proc.exno := exno; INC(exno) END;
+      (* exported methods also get an export-entry number so importers can
+         reference them by mno:exno (816 cross-module dispatch) *)
+      IF proc.expo THEN proc.exno := exno; INC(exno) END;
       ORB.OpenScope;
       INC(level);
       type.base := ORB.noType;

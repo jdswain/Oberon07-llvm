@@ -48,11 +48,12 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     FP_FLOOR = 4; FP_FLT = 5; FP_OPS = 6;
     maxFPFixups = 64;
     maxForNest = 8;        (* max nested FOR loops with a non-const limit *)
+    maxEnt = 256;          (* max .816 export-table entries *)
+    maxMeth = 64;          (* max vtable slots per type *)
+    maxVtFix = 512;        (* max vtable-slot loader fixups per module *)
     VtableOff = 16;        (* byte offset of vtable[0] in a TD: size(2) +
-                              3 ancestors(12) + nofmeth(2). Slots are 2-byte
-                              method code offsets (relative to the code base). *)
-    CODEBASE_DP = 46H;     (* module code base, computed at init via PER, so
-                              dynamic dispatch is position-independent *)
+                              3 ancestors(12) + nofmeth(2). Each slot is a 2-byte
+                              absolute in-bank method address filled by the loader. *)
 
   TYPE
     Item* = RECORD
@@ -94,6 +95,11 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     tdRefLoc: ARRAY maxTD OF LONGINT;             (* code sites needing a T.len *)
     tdRefTyp: ARRAY maxTD OF ORB.Type;
     tdRefC: INTEGER;
+    entryVal: ARRAY maxEnt OF LONGINT;            (* .816 entry table, by exno *)
+    vtFixOff, vtFixMno, vtFixExno: ARRAY maxVtFix OF LONGINT;  (* vtable slot fixups *)
+    vtFixC: INTEGER;
+    slotMeth: ARRAY maxMeth OF ORB.Object;        (* method per vtable slot *)
+    slotMno: ARRAY maxMeth OF LONGINT;            (* its defining type's mno *)
     fpFixups: ARRAY FP_OPS, maxFPFixups OF LONGINT;
     fpFixupCount: ARRAY FP_OPS OF INTEGER;
     fpSubAddr: ARRAY FP_OPS OF LONGINT;
@@ -1005,13 +1011,19 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   (* Fill T's vtable words (base first, so a derived override wins the slot).
      Slots hold the method's CODE OFFSET (relative to the module code base) —
      a compile-time constant, so no relocation. *)
-  PROCEDURE fillVt(anc: ORB.Type; nm, vtword: LONGINT);
+  (* Record the most-derived method per slot (base first so a derived
+     override wins) together with its defining type's mno, so GenTDs can tell
+     an own method (fill its code offset) from an imported inherited one
+     (leave a loader vtable-fixup). *)
+  PROCEDURE fillVt(anc: ORB.Type; nm: LONGINT);
     VAR m: ORB.Object;
   BEGIN
-    IF anc.base # NIL THEN fillVt(anc.base, nm, vtword) END;
+    IF anc.base # NIL THEN fillVt(anc.base, nm) END;
     m := anc.meth;
     WHILE m # NIL DO
-      IF (m.val >= 0) & (m.val < nm) THEN data[vtword + m.val] := m.backend END;
+      IF (m.val >= 0) & (m.val < nm) THEN
+        slotMeth[m.val] := m; slotMno[m.val] := anc.mno
+      END;
       m := m.next
     END
   END fillVt;
@@ -1037,13 +1049,38 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         END
       END;
       (* method vtable: nofmeth (TOTAL incl. inherited), then that many 2-byte
-         code offsets (most-derived impl per slot). Dispatch reads
-         code base + slot at runtime. *)
+         slots holding the ABSOLUTE in-bank code address of the most-derived
+         impl. All modules load into one bank, so the loader fills every slot:
+         an own method (mno=0) as module_base + its code offset; an imported
+         inherited one (mno>0) via (mno, exno). Dispatch just reads the slot —
+         no per-caller code base, which is what makes an imported object's
+         method reachable from any module. *)
       nm := ORB.TotalMeths(T);
+      IF nm > maxMeth THEN ORS.Mark("too many methods"); nm := 0 END;
       data[dcw] := nm; dcw := dcw + 1;
       IF nm > 0 THEN
-        s := 0; WHILE s < nm DO data[dcw + s] := 0; s := s + 1 END;
-        fillVt(T, nm, dcw);
+        s := 0; WHILE s < nm DO slotMeth[s] := NIL; slotMno[s] := 0; s := s + 1 END;
+        fillVt(T, nm);
+        s := 0;
+        WHILE s < nm DO
+          IF slotMeth[s] = NIL THEN data[dcw + s] := 0   (* abstract: no impl *)
+          ELSE
+            IF vtFixC >= maxVtFix THEN ORS.Mark("too many vtable fixups")
+            ELSE
+              vtFixOff[vtFixC] := tdBase + (dcw + s) * 2;
+              IF slotMno[s] <= 0 THEN   (* own method: slot = base + offset *)
+                data[dcw + s] := slotMeth[s].backend;
+                vtFixMno[vtFixC] := 0; vtFixExno[vtFixC] := 0
+              ELSE                      (* imported inherited: loader resolves *)
+                data[dcw + s] := 0;
+                vtFixMno[vtFixC] := slotMno[s];
+                vtFixExno[vtFixC] := slotMeth[s].exno
+              END;
+              vtFixC := vtFixC + 1
+            END
+          END;
+          s := s + 1
+        END;
         dcw := dcw + nm
       END;
       FindPtrFlds(T, 0, dcw);
@@ -2149,9 +2186,11 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     Set16(TRUE, TRUE);
     IF x.dynDisp THEN
       (* dynamic dispatch: receiver (object pointer) is param 0 in R0/R1.
-         tag := [obj-4]; off := [tag + VtableOff + slot*2] (a code offset);
-         method := codeBase + off; indirect-long call. Scratch above RH. *)
-      addrReg := RegAddr(RH); bankReg := RegAddr(RH + 1);
+         tag := [obj-4]; addr := [tag + VtableOff + slot*2] — the loader has
+         already filled that slot with the method's absolute in-bank address,
+         so no code base is added. All modules share one bank, so the call
+         bank is the current program bank (PHK). Scratch above RH. *)
+      addrReg := RegAddr(RH);
       OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(0), 0);
       OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
       OCG.Gen(OCG.SBC, OCG.mImm, 4, 0);
@@ -2159,29 +2198,20 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(1), 0);
       OCG.Gen(OCG.SBC, OCG.mImm, 0, 0);
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 3), 0);
-      OCG.Gen(OCG.LDA, OCG.mDPIndL, RegAddr(RH + 2), 0);
-      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 4), 0);
-      OCG.Gen(OCG.LDY, OCG.mImm, 2, 0);
-      OCG.Gen(OCG.LDA, OCG.mDPIndLY, RegAddr(RH + 2), 0);
-      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 5), 0);
-      OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(RH + 4), 0);
+      OCG.Gen(OCG.LDA, OCG.mDPIndL, RegAddr(RH + 2), 0);   (* TD addr lo *)
       OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
       OCG.Gen(OCG.ADC, OCG.mImm, VtableOff + x.methSlot * 2, 0);
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 4), 0);
-      OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(RH + 5), 0);
-      OCG.Gen(OCG.ADC, OCG.mImm, 0, 0);
+      OCG.Gen(OCG.LDY, OCG.mImm, 2, 0);
+      OCG.Gen(OCG.LDA, OCG.mDPIndLY, RegAddr(RH + 2), 0);  (* TD bank *)
+      OCG.Gen(OCG.ADC, OCG.mImm, 0, 0);                    (* carry from lo add *)
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 5), 0);
-      OCG.Gen(OCG.LDA, OCG.mDPIndL, RegAddr(RH + 4), 0);   (* code offset *)
-      OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
-      OCG.Gen(OCG.ADC, OCG.mDP, CODEBASE_DP, 0);           (* + code base *)
+      OCG.Gen(OCG.LDA, OCG.mDPIndL, RegAddr(RH + 4), 0);   (* method address *)
       OCG.Gen(OCG.STA, OCG.mDP, addrReg, 0);
-      OCG.Gen(OCG.LDA, OCG.mDP, CODEBASE_DP + 2, 0);
-      OCG.Gen(OCG.STA, OCG.mDP, bankReg, 0);
       OCG.Gen(OCG.PHK, OCG.mImpl, 0, 0);
-      OCG.Gen(OCG.PER, OCG.mImm, 0BH, 0);
+      OCG.Gen(OCG.PER, OCG.mImm, 09H, 0);
       Set8(TRUE, FALSE);
-      OCG.Gen(OCG.LDA, OCG.mDP, bankReg, 0);
-      OCG.Gen(OCG.PHA, OCG.mImpl, 0, 0);
+      OCG.Gen(OCG.PHK, OCG.mImpl, 0, 0);
       Set16(TRUE, FALSE);
       OCG.Gen(OCG.LDA, OCG.mDP, addrReg, 0);
       OCG.Gen(OCG.DEC, OCG.mAcc, 0, 0);
@@ -2270,7 +2300,13 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       paramItem, regItem: Item;
   BEGIN
     frameSize := parblksize + locblksize;
-    curFrameSize := frameSize; curExpo := proc.expo; curIntProc := intProc;
+    (* Methods always use the far (RTL) convention: dynamic dispatch reaches
+       them via a long call and the vtable demands ONE uniform convention
+       across every override, so a method can never be a near (RTS) proc.
+       The far path also saves/resets SB, which is what makes an imported
+       method run with its own module's static base. *)
+    curFrameSize := frameSize; curExpo := proc.expo OR (proc.class = ORB.Meth);
+    curIntProc := intProc;
     forDepth := 0;
     (* a method keeps its vtable slot in .val, so record its compiled entry
        address in .backend for BuildTD/Close to wire into the vtable *)
@@ -2278,7 +2314,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     IF ~intProc THEN
       IF frameSize >= 4000H THEN ORS.Mark("too many locals") END;
       Set16(TRUE, TRUE);
-      IF proc.expo THEN
+      IF curExpo THEN
         OCG.Gen(OCG.LDA, OCG.mDP, SB_DP, 0);
         OCG.Gen(OCG.PHA, OCG.mImpl, 0, 0);
         OCG.Gen(OCG.LDA, OCG.mDP, BANK_DP, 0);
@@ -2895,7 +2931,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     OCG.Init; OCG.SetPc(CodeOrg);
     tdx := 0; strx := 0; RH := 0; forDepth := 0;
     fixorgP := 0; fixorgD := 0; fixorgT := 0;
-    tdFixupC := 0; tdListC := 0; tdRefC := 0;
+    tdFixupC := 0; tdListC := 0; tdRefC := 0; vtFixC := 0;
     FOR i := 0 TO FP_OPS - 1 DO fpFixupCount[i] := 0 END;
     check := v # 0; version := v;
     IF v = 0 THEN
@@ -2910,7 +2946,6 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   END SetDataSize;
 
   PROCEDURE Header*;
-    VAR perLoc: LONGINT;
   BEGIN
     entry := OCG.Here();
     OCG.SetLongA(TRUE); OCG.SetLongI(TRUE);
@@ -2919,22 +2954,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     OCG.Gen(OCG.STA, OCG.mDP, SB_DP, 0);
     OCG.AddRel(OCG.Here() + 80000000H);
     OCG.Gen(OCG.LDA, OCG.mImm, 0, 0);
-    OCG.Gen(OCG.STA, OCG.mDP, BANK_DP, 0);
-    (* code base = this module's runtime code-start address, computed with a
-       single PC-relative PER so dynamic dispatch needs no loader relocation.
-       PER #0 pushes (codeBase + perLoc + 3); subtract to recover codeBase. *)
-    perLoc := OCG.Here();
-    OCG.Gen(OCG.PER, OCG.mImm, 0, 0);
-    OCG.Gen(OCG.PLA, OCG.mImpl, 0, 0);
-    OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
-    OCG.Gen(OCG.SBC, OCG.mImm, perLoc + 3, 0);
-    OCG.Gen(OCG.STA, OCG.mDP, CODEBASE_DP, 0);
-    OCG.Gen(OCG.STZ, OCG.mDP, CODEBASE_DP + 2, 0);
-    OCG.Gen(OCG.PHK, OCG.mImpl, 0, 0);
-    Set8(TRUE, FALSE);
-    OCG.Gen(OCG.PLA, OCG.mImpl, 0, 0);
-    OCG.Gen(OCG.STA, OCG.mDP, CODEBASE_DP + 2, 0);
-    Set16(TRUE, FALSE)
+    OCG.Gen(OCG.STA, OCG.mDP, BANK_DP, 0)
   END Header;
 
   PROCEDURE NofPtrs(typ: ORB.Type): LONGINT;
@@ -3818,26 +3838,42 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     Write4(R, nofent);
     Write4(R, entry);
 
+    (* Build the export table indexed by exno (the loader indexes exports[]
+       by exno), merging module-level procs/vars/types with methods — which
+       live in each record's meth list, not topScope. A method's entry is its
+       CODE address (backend), so importers can reach it by mno:exno. *)
+    i := 0; WHILE i < maxEnt DO entryVal[i] := 0; i := i + 1 END;
     obj := ORB.topScope.next;
     WHILE obj # NIL DO
-      IF obj.exno # 0 THEN
+      IF (obj.exno # 0) & (obj.exno < maxEnt) THEN
         IF ((obj.class = ORB.Const) & (obj.type.form = ORB.Proc)) OR
            (obj.class = ORB.Var) THEN
-          Write4(R, obj.val)
+          entryVal[obj.exno] := obj.val
         ELSIF (obj.class = ORB.Const) &
               ((obj.type.form = ORB.Array) OR (obj.type.form = ORB.Record)) THEN
-          Write4(R, varsize + obj.val)
+          entryVal[obj.exno] := varsize + obj.val
         ELSIF obj.class = ORB.Typ THEN
           IF obj.type.form = ORB.Record THEN
-            Write4(R, obj.type.len MOD 10000H)
+            entryVal[obj.exno] := obj.type.len MOD 10000H
           ELSIF (obj.type.form = ORB.Pointer) &
                 ((obj.type.base.typobj = NIL) OR (obj.type.base.typobj.exno = 0)) THEN
-            Write4(R, obj.type.base.len MOD 10000H)
+            entryVal[obj.exno] := obj.type.base.len MOD 10000H
           END
         END
       END;
       obj := obj.next
     END;
+    i := 0;
+    WHILE i < tdListC DO
+      obj := tdList[i].meth;
+      WHILE obj # NIL DO
+        IF (obj.exno # 0) & (obj.exno < maxEnt) THEN entryVal[obj.exno] := obj.backend END;
+        obj := obj.next
+      END;
+      i := i + 1
+    END;
+    i := 1;
+    WHILE i < nofent DO Write4(R, entryVal[i]); i := i + 1 END;
 
     obj := ORB.topScope.next;
     WHILE obj # NIL DO
@@ -3857,6 +3893,20 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       Files.WriteByte(R, tdFixupOff[i] DIV 100H MOD 100H);
       Files.WriteByte(R, tdFixupMno[i] MOD 100H);
       Files.WriteByte(R, tdFixupMno[i] DIV 100H MOD 100H);
+      i := i + 1
+    END;
+
+    (* vtable fixups: an imported inherited method's slot, resolved by the
+       loader to (import_base + exports[exno]) - this_module_code_base so the
+       codeBase+slot dispatch lands in the base module. offset(4) mno(2) exno(2). *)
+    Write4(R, vtFixC);
+    i := 0;
+    WHILE i < vtFixC DO
+      Write4(R, vtFixOff[i]);
+      Files.WriteByte(R, vtFixMno[i] MOD 100H);
+      Files.WriteByte(R, vtFixMno[i] DIV 100H MOD 100H);
+      Files.WriteByte(R, vtFixExno[i] MOD 100H);
+      Files.WriteByte(R, vtFixExno[i] DIV 100H MOD 100H);
       i := i + 1
     END;
 
@@ -3941,9 +3991,9 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     IF direct THEN
       x.dynDisp := FALSE;
       x.mode := ORB.Const; x.a := m.backend; x.r := 0;
-      (* exported methods return via RTL (like exported procs), so they must
-         be reached with JSL even locally; non-exported use JSR/RTS *)
-      IF m.expo THEN x.b := 1 ELSE x.b := 0 END
+      (* methods always return via RTL (far convention — see Enter), so a
+         direct/SUPER call must reach them with JSL even within the module *)
+      x.b := 1
     ELSE
       x.dynDisp := TRUE; x.methSlot := m.val; x.mode := ORB.Const
     END
@@ -3987,7 +4037,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     x.rcvMode := Reg; x.rcvR := rh0; x.rcvType := rec;
     x.isMeth := TRUE; x.dynDisp := FALSE; x.type := m.type;
     x.mode := ORB.Const; x.a := m.backend; x.r := 0;
-    IF m.expo THEN x.b := 1 ELSE x.b := 0 END
+    x.b := 1  (* init bodies are methods: far/RTL convention, reach via JSL *)
   END InitItem;
 
   PROCEDURE IfaceMethodItem*(VAR x: Item; m: ORB.Object);

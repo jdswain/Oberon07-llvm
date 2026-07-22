@@ -16,7 +16,7 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
 
   IMPORT Files, Out, ORS;
 
-  CONST versionkey* = 5; maxTypTab = 64;
+  CONST versionkey* = 6; maxTypTab = 64;   (* v6: methods carry exno (816 cross-module) *)
     MnLength = 104;  (* mangled Mod__Type__Name *)
 
     (* class values *)
@@ -452,6 +452,7 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
             Read(R, k); mth.expo := k = 1;
             Read(R, k); mth.initf := k = 1;
             RNum(R, mth.val);        (* vtable slot (-1 for inits) *)
+            RNum(R, n); mth.exno := n;  (* v6: export-entry number *)
             Files.ReadString(R, mth.mname);
             InType(R, thismod, mth.type);
             mth.lev := -thismod.lev;
@@ -643,6 +644,7 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
         IF m.expo THEN Write(R, 1) ELSE Write(R, 0) END;
         IF m.initf THEN Write(R, 1) ELSE Write(R, 0) END;
         WNum(R, m.val);
+        WNum(R, m.exno);   (* v6: export-entry number, for 816 cross-module dispatch *)
         Files.WriteString(R, m.mname);
         OutType(R, m.type);
         m := m.next
