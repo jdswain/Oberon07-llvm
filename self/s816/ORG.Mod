@@ -2114,9 +2114,10 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   PROCEDURE PrepCall*(VAR x: Item; VAR r: LONGINT);
     VAR rcv: Item;
   BEGIN
-    IF x.isMeth & x.dynDisp THEN
-      (* pointer receiver: the object pointer was already DeRef'd into
-         [rcvR, rcvR+1]. Save the outer context below it, keep the receiver,
+    IF x.isMeth & ((x.rcvMode = Reg) OR (x.rcvMode = RegI)) THEN
+      (* receiver already in registers [rcvR, rcvR+1] — a DeRef'd pointer
+         (dynamic dispatch / SUPER) or a freshly-allocated instance (a
+         constructor). Save the outer context below it, keep the receiver,
          and move it to R0/R1 as param 0; scratch/args then sit above it. *)
       r := x.rcvR;
       IF x.rcvR > 0 THEN SaveRegs(x.rcvR) END;
@@ -3948,8 +3949,45 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     END
   END MethodItem;
 
+  (* T.Name(args) constructor: allocate a fresh instance of rec (BRK #10 +
+     tag header, like New), keep it in registers as the receiver, and set x
+     to a direct call to the init body m. The init returns the receiver. *)
   PROCEDURE InitItem*(VAR x: Item; m: ORB.Object; rec: ORB.Type);
-  BEGIN ORS.Mark("constructors not implemented on 65C816 yet")
+    VAR rh0, sb: LONGINT;
+  BEGIN
+    rh0 := RH;
+    Set16(TRUE, TRUE);
+    sb := GetSB(-rec.mno);
+    OCG.Gen(OCG.LDA, OCG.mDP, sb, 0);
+    OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+    emitTDLen(rec);
+    OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH), 0);
+    OCG.Gen(OCG.STZ, OCG.mDP, RegAddr(RH + 1), 0);
+    incR; incR;
+    OCG.Gen(OCG.LDA, OCG.mImm, rec.size + 4, 0);
+    OCG.Gen(OCG.BRK, OCG.mImm, 10, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH), 0);
+    OCG.Gen(OCG.STX, OCG.mDP, RegAddr(RH + 1), 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(RH - 2), 0);
+    OCG.Gen(OCG.STA, OCG.mDPIndL, RegAddr(RH), 0);
+    OCG.Gen(OCG.LDY, OCG.mImm, 2, 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(RH - 1), 0);
+    OCG.Gen(OCG.STA, OCG.mDPIndLY, RegAddr(RH), 0);
+    OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(RH), 0);
+    OCG.Gen(OCG.ADC, OCG.mImm, 4, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH), 0);
+    (* object is now at [rh0+2, rh0+3]; move it over the dead tag registers to
+       [rh0, rh0+1] so PrepCall only saves the genuine outer context *)
+    OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(RH), 0);
+    OCG.Gen(OCG.STA, OCG.mDP, RegAddr(rh0), 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(RH + 1), 0);
+    OCG.Gen(OCG.STA, OCG.mDP, RegAddr(rh0 + 1), 0);
+    RH := rh0 + 2;
+    x.rcvMode := Reg; x.rcvR := rh0; x.rcvType := rec;
+    x.isMeth := TRUE; x.dynDisp := FALSE; x.type := m.type;
+    x.mode := ORB.Const; x.a := m.backend; x.r := 0;
+    IF m.expo THEN x.b := 1 ELSE x.b := 0 END
   END InitItem;
 
   PROCEDURE IfaceMethodItem*(VAR x: Item; m: ORB.Object);
