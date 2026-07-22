@@ -48,6 +48,11 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     FP_FLOOR = 4; FP_FLT = 5; FP_OPS = 6;
     maxFPFixups = 64;
     maxForNest = 8;        (* max nested FOR loops with a non-const limit *)
+    VtableOff = 16;        (* byte offset of vtable[0] in a TD: size(2) +
+                              3 ancestors(12) + nofmeth(2). Slots are 2-byte
+                              method code offsets (relative to the code base). *)
+    CODEBASE_DP = 46H;     (* module code base, computed at init via PER, so
+                              dynamic dispatch is position-independent *)
 
   TYPE
     Item* = RECORD
@@ -997,11 +1002,25 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     END
   END emitTDLen;
 
+  (* Fill T's vtable words (base first, so a derived override wins the slot).
+     Slots hold the method's CODE OFFSET (relative to the module code base) —
+     a compile-time constant, so no relocation. *)
+  PROCEDURE fillVt(anc: ORB.Type; nm, vtword: LONGINT);
+    VAR m: ORB.Object;
+  BEGIN
+    IF anc.base # NIL THEN fillVt(anc.base, nm, vtword) END;
+    m := anc.meth;
+    WHILE m # NIL DO
+      IF (m.val >= 0) & (m.val < nm) THEN data[vtword + m.val] := m.backend END;
+      m := m.next
+    END
+  END fillVt;
+
   (* Generate every recorded descriptor into data[], placed at var-relative
      offset tdBase = varsize + strx (after the variables and strings), and
      patch the forward T.len references. Called from Close. *)
   PROCEDURE GenTDs;
-    VAR i, dcw, k: LONGINT; T: ORB.Type;
+    VAR i, dcw, k, s, nm: LONGINT; T: ORB.Type;
   BEGIN
     tdBase := varsize + strx; dcw := 0; i := 0;
     WHILE i < tdListC DO
@@ -1016,6 +1035,16 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
           data[dcw] := 0FFFFH; data[dcw + 1] := 0FFFFH;
           dcw := dcw + 2; k := k + 1
         END
+      END;
+      (* method vtable: nofmeth (TOTAL incl. inherited), then that many 2-byte
+         code offsets (most-derived impl per slot). Dispatch reads
+         code base + slot at runtime. *)
+      nm := ORB.TotalMeths(T);
+      data[dcw] := nm; dcw := dcw + 1;
+      IF nm > 0 THEN
+        s := 0; WHILE s < nm DO data[dcw + s] := 0; s := s + 1 END;
+        fillVt(T, nm, dcw);
+        dcw := dcw + nm
       END;
       FindPtrFlds(T, 0, dcw);
       data[dcw] := 0FFFFH; dcw := dcw + 1;
@@ -2085,17 +2114,30 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   PROCEDURE PrepCall*(VAR x: Item; VAR r: LONGINT);
     VAR rcv: Item;
   BEGIN
-    IF x.mode > ORB.Par THEN load(x) END;
-    r := RH;
-    IF RH > 0 THEN SaveRegs(RH); RH := 0 END;
-    IF x.isMeth THEN
-      (* pass the receiver as param 0 (ParamList skips it). Reconstruct the
-         stashed designator and hand it to VarParam, so a VAR-record receiver
-         goes as addr+bank+tag and a pointer receiver as its addr+bank. *)
-      rcv.mode := x.rcvMode; rcv.a := x.rcvA; rcv.b := x.rcvB; rcv.r := x.rcvR;
-      rcv.rdo := x.rcvRdo; rcv.type := x.rcvType; rcv.isMeth := FALSE;
-      IF rcv.type.form = ORB.Record THEN VarParam(rcv, rcv.type)
-      ELSE load(rcv)   (* pointer receiver: pass the pointer value *)
+    IF x.isMeth & x.dynDisp THEN
+      (* pointer receiver: the object pointer was already DeRef'd into
+         [rcvR, rcvR+1]. Save the outer context below it, keep the receiver,
+         and move it to R0/R1 as param 0; scratch/args then sit above it. *)
+      r := x.rcvR;
+      IF x.rcvR > 0 THEN SaveRegs(x.rcvR) END;
+      IF x.rcvR # 0 THEN
+        Set16(TRUE, TRUE);
+        OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(x.rcvR), 0);
+        OCG.Gen(OCG.STA, OCG.mDP, RegAddr(0), 0);
+        OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(x.rcvR + 1), 0);
+        OCG.Gen(OCG.STA, OCG.mDP, RegAddr(1), 0)
+      END;
+      RH := 2
+    ELSE
+      IF x.mode > ORB.Par THEN load(x) END;
+      r := RH;
+      IF RH > 0 THEN SaveRegs(RH); RH := 0 END;
+      IF x.isMeth THEN
+        (* VAR-record receiver (static): reload it from memory as param 0 —
+           addr+bank+tag — via VarParam. ParamList skips param 0. *)
+        rcv.mode := x.rcvMode; rcv.a := x.rcvA; rcv.b := x.rcvB; rcv.r := x.rcvR;
+        rcv.rdo := x.rcvRdo; rcv.type := x.rcvType; rcv.isMeth := FALSE;
+        VarParam(rcv, rcv.type)
       END
     END
   END PrepCall;
@@ -2103,9 +2145,48 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   PROCEDURE Call*(VAR x: Item; r: LONGINT);
     VAR mno, exno, encoded, addrReg, bankReg: LONGINT; wide: BOOLEAN;
   BEGIN
-    IF x.dynDisp THEN ORS.Mark("pointer-receiver dynamic dispatch: pending M4a.2") END;
     Set16(TRUE, TRUE);
-    IF x.mode = ORB.Const THEN
+    IF x.dynDisp THEN
+      (* dynamic dispatch: receiver (object pointer) is param 0 in R0/R1.
+         tag := [obj-4]; off := [tag + VtableOff + slot*2] (a code offset);
+         method := codeBase + off; indirect-long call. Scratch above RH. *)
+      addrReg := RegAddr(RH); bankReg := RegAddr(RH + 1);
+      OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(0), 0);
+      OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+      OCG.Gen(OCG.SBC, OCG.mImm, 4, 0);
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 2), 0);
+      OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(1), 0);
+      OCG.Gen(OCG.SBC, OCG.mImm, 0, 0);
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 3), 0);
+      OCG.Gen(OCG.LDA, OCG.mDPIndL, RegAddr(RH + 2), 0);
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 4), 0);
+      OCG.Gen(OCG.LDY, OCG.mImm, 2, 0);
+      OCG.Gen(OCG.LDA, OCG.mDPIndLY, RegAddr(RH + 2), 0);
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 5), 0);
+      OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(RH + 4), 0);
+      OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+      OCG.Gen(OCG.ADC, OCG.mImm, VtableOff + x.methSlot * 2, 0);
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 4), 0);
+      OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(RH + 5), 0);
+      OCG.Gen(OCG.ADC, OCG.mImm, 0, 0);
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 5), 0);
+      OCG.Gen(OCG.LDA, OCG.mDPIndL, RegAddr(RH + 4), 0);   (* code offset *)
+      OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+      OCG.Gen(OCG.ADC, OCG.mDP, CODEBASE_DP, 0);           (* + code base *)
+      OCG.Gen(OCG.STA, OCG.mDP, addrReg, 0);
+      OCG.Gen(OCG.LDA, OCG.mDP, CODEBASE_DP + 2, 0);
+      OCG.Gen(OCG.STA, OCG.mDP, bankReg, 0);
+      OCG.Gen(OCG.PHK, OCG.mImpl, 0, 0);
+      OCG.Gen(OCG.PER, OCG.mImm, 0BH, 0);
+      Set8(TRUE, FALSE);
+      OCG.Gen(OCG.LDA, OCG.mDP, bankReg, 0);
+      OCG.Gen(OCG.PHA, OCG.mImpl, 0, 0);
+      Set16(TRUE, FALSE);
+      OCG.Gen(OCG.LDA, OCG.mDP, addrReg, 0);
+      OCG.Gen(OCG.DEC, OCG.mAcc, 0, 0);
+      OCG.Gen(OCG.PHA, OCG.mImpl, 0, 0);
+      OCG.Gen(OCG.RTL, OCG.mImpl, 0, 0)
+    ELSIF x.mode = ORB.Const THEN
       IF x.r < 0 THEN
         mno := -x.r; exno := x.a;
         encoded := mno * 10000H + (exno MOD 10000H);
@@ -2828,6 +2909,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   END SetDataSize;
 
   PROCEDURE Header*;
+    VAR perLoc: LONGINT;
   BEGIN
     entry := OCG.Here();
     OCG.SetLongA(TRUE); OCG.SetLongI(TRUE);
@@ -2836,7 +2918,22 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     OCG.Gen(OCG.STA, OCG.mDP, SB_DP, 0);
     OCG.AddRel(OCG.Here() + 80000000H);
     OCG.Gen(OCG.LDA, OCG.mImm, 0, 0);
-    OCG.Gen(OCG.STA, OCG.mDP, BANK_DP, 0)
+    OCG.Gen(OCG.STA, OCG.mDP, BANK_DP, 0);
+    (* code base = this module's runtime code-start address, computed with a
+       single PC-relative PER so dynamic dispatch needs no loader relocation.
+       PER #0 pushes (codeBase + perLoc + 3); subtract to recover codeBase. *)
+    perLoc := OCG.Here();
+    OCG.Gen(OCG.PER, OCG.mImm, 0, 0);
+    OCG.Gen(OCG.PLA, OCG.mImpl, 0, 0);
+    OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+    OCG.Gen(OCG.SBC, OCG.mImm, perLoc + 3, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, CODEBASE_DP, 0);
+    OCG.Gen(OCG.STZ, OCG.mDP, CODEBASE_DP + 2, 0);
+    OCG.Gen(OCG.PHK, OCG.mImpl, 0, 0);
+    Set8(TRUE, FALSE);
+    OCG.Gen(OCG.PLA, OCG.mImpl, 0, 0);
+    OCG.Gen(OCG.STA, OCG.mDP, CODEBASE_DP + 2, 0);
+    Set16(TRUE, FALSE)
   END Header;
 
   PROCEDURE NofPtrs(typ: ORB.Type): LONGINT;
