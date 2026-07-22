@@ -79,6 +79,16 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     str: ARRAY maxStrx OF INTEGER;     (* string/const data bytes *)
     tdFixupOff, tdFixupMno: ARRAY maxTD OF INTEGER;
     tdFixupC: INTEGER;
+    (* deferred type descriptors (classic Oberon-2 single-pass): types are
+       recorded at declaration and their descriptors generated at Close,
+       placed after the variables + strings so the vtable size is known.
+       New/TypeTest emit T.len as a forward fixup patched in GenTDs. *)
+    tdList: ARRAY maxTD OF ORB.Type;
+    tdListC: INTEGER;
+    tdBase: LONGINT;                              (* var-relative base of TD region *)
+    tdRefLoc: ARRAY maxTD OF LONGINT;             (* code sites needing a T.len *)
+    tdRefTyp: ARRAY maxTD OF ORB.Type;
+    tdRefC: INTEGER;
     fpFixups: ARRAY FP_OPS, maxFPFixups OF LONGINT;
     fpFixupCount: ARRAY FP_OPS OF INTEGER;
     fpSubAddr: ARRAY FP_OPS OF LONGINT;
@@ -937,7 +947,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     IF T.base # NIL THEN
       Q(T.base, dcw);
       data[dcw] := T.len; data[dcw + 1] := 0;
-      tdFixupOff[tdFixupC] := dcw * 2; tdFixupMno[tdFixupC] := T.mno;
+      tdFixupOff[tdFixupC] := tdBase + dcw * 2; tdFixupMno[tdFixupC] := T.mno;
       tdFixupC := tdFixupC + 1;
       dcw := dcw + 2
     END
@@ -961,26 +971,65 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     END
   END FindPtrFlds;
 
+  (* BuildTD only RECORDS the type. The descriptor is generated at Close by
+     GenTDs, once every method (hence the vtable size) is known — the classic
+     Oberon-2 single-pass discipline, matching the LLVM backend here. *)
   PROCEDURE BuildTD*(T: ORB.Type; VAR dc: LONGINT);
-    VAR dcw, k: LONGINT;
   BEGIN
-    dcw := dc DIV 2;
-    T.len := dc;
-    data[dcw] := T.size; dcw := dcw + 1;
-    k := T.nofpar;
-    IF k > 3 THEN ORS.Mark("ext level too large")
-    ELSE
-      Q(T, dcw);
-      WHILE k < 3 DO
-        data[dcw] := 0FFFFH; data[dcw + 1] := 0FFFFH;
-        dcw := dcw + 2; k := k + 1
-      END
-    END;
-    FindPtrFlds(T, 0, dcw);
-    data[dcw] := 0FFFFH; dcw := dcw + 1;
-    tdx := dcw; dc := dcw * 2;
-    IF tdx >= maxTD THEN ORS.Mark("too many record types"); tdx := 0 END
+    IF tdListC < maxTD THEN tdList[tdListC] := T; tdListC := tdListC + 1
+    ELSE ORS.Mark("too many record types")
+    END
   END BuildTD;
+
+  (* Emit `ADC #<T's descriptor offset>`. Own-module T.len is not known until
+     GenTDs, so leave a placeholder + forward fixup; imported types already
+     carry their offset in the .smb. *)
+  PROCEDURE emitTDLen(T: ORB.Type);
+  BEGIN
+    IF T.mno <= 0 THEN
+      OCG.Gen(OCG.ADC, OCG.mImm, 0, 0);
+      IF tdRefC < maxTD THEN
+        tdRefLoc[tdRefC] := OCG.Here() - 2; tdRefTyp[tdRefC] := T;
+        tdRefC := tdRefC + 1
+      ELSE ORS.Mark("too many descriptor refs")
+      END
+    ELSE OCG.Gen(OCG.ADC, OCG.mImm, T.len, 0)
+    END
+  END emitTDLen;
+
+  (* Generate every recorded descriptor into data[], placed at var-relative
+     offset tdBase = varsize + strx (after the variables and strings), and
+     patch the forward T.len references. Called from Close. *)
+  PROCEDURE GenTDs;
+    VAR i, dcw, k: LONGINT; T: ORB.Type;
+  BEGIN
+    tdBase := varsize + strx; dcw := 0; i := 0;
+    WHILE i < tdListC DO
+      T := tdList[i];
+      T.len := tdBase + dcw * 2;
+      data[dcw] := T.size; dcw := dcw + 1;
+      k := T.nofpar;
+      IF k > 3 THEN ORS.Mark("ext level too large")
+      ELSE
+        Q(T, dcw);
+        WHILE k < 3 DO
+          data[dcw] := 0FFFFH; data[dcw + 1] := 0FFFFH;
+          dcw := dcw + 2; k := k + 1
+        END
+      END;
+      FindPtrFlds(T, 0, dcw);
+      data[dcw] := 0FFFFH; dcw := dcw + 1;
+      i := i + 1
+    END;
+    tdx := dcw;
+    IF tdx >= maxTD THEN ORS.Mark("too many record types"); tdx := 0 END;
+    i := 0;
+    WHILE i < tdRefC DO
+      OCG.Patch(tdRefLoc[i], tdRefTyp[i].len MOD 100H);
+      OCG.Patch(tdRefLoc[i] + 1, tdRefTyp[i].len DIV 100H MOD 100H);
+      i := i + 1
+    END
+  END GenTDs;
 
   PROCEDURE TypeTest*(VAR x: Item; T: ORB.Type; varpar, isguard: BOOLEAN);
     VAR offset, sb, nilSkip: LONGINT;
@@ -1013,7 +1062,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       sb := GetSB(-T.mno);
       OCG.Gen(OCG.LDA, OCG.mDP, sb, 0);
       OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
-      OCG.Gen(OCG.ADC, OCG.mImm, T.len, 0);
+      emitTDLen(T);
       OCG.Gen(OCG.EOR, OCG.mDP, RegAddr(RH - 2), 0);
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH - 2), 0);
       OCG.Gen(OCG.LDA, OCG.mImm, 0, 0);
@@ -1063,7 +1112,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       sb := GetSB(-T.mno);
       OCG.Gen(OCG.LDA, OCG.mDP, sb, 0);
       OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
-      OCG.Gen(OCG.ADC, OCG.mImm, T.len, 0);
+      emitTDLen(T);
       OCG.Gen(OCG.EOR, OCG.mDP, RegAddr(RH - 2), 0);
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH - 2), 0);
       OCG.Gen(OCG.LDA, OCG.mImm, 0, 0);
@@ -1856,7 +1905,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         sb := GetSB(-x.type.mno);
         OCG.Gen(OCG.LDA, OCG.mDP, sb, 0);
         OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
-        OCG.Gen(OCG.ADC, OCG.mImm, x.type.len, 0);
+        emitTDLen(x.type);
         OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r + 2), 0);
         OCG.Gen(OCG.STZ, OCG.mDP, RegAddr(x.r + 3), 0)
       END;
@@ -2417,7 +2466,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     sb := GetSB(-baseType.mno);
     OCG.Gen(OCG.LDA, OCG.mDP, sb, 0);
     OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
-    OCG.Gen(OCG.ADC, OCG.mImm, baseType.len, 0);
+    emitTDLen(baseType);
     OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH), 0);
     OCG.Gen(OCG.STZ, OCG.mDP, RegAddr(RH + 1), 0);
     incR; incR;
@@ -2764,7 +2813,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     OCG.Init; OCG.SetPc(CodeOrg);
     tdx := 0; strx := 0; RH := 0; forDepth := 0;
     fixorgP := 0; fixorgD := 0; fixorgT := 0;
-    tdFixupC := 0;
+    tdFixupC := 0; tdListC := 0; tdRefC := 0;
     FOR i := 0 TO FP_OPS - 1 DO fpFixupCount[i] := 0 END;
     check := v # 0; version := v;
     IF v = 0 THEN
@@ -3597,6 +3646,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     (* Exit: emulator calls main with JSL, return with RTL *)
     OCG.Gen(OCG.RTL, OCG.mImpl, 0, 0);
     emitFPSubroutines; fixupFPCalls;
+    GenTDs;   (* generate deferred type descriptors + patch T.len fixups *)
 
     obj := ORB.topScope.next;
     nofimps := 0; comsize := 4; nofptrs := 0;
@@ -3645,7 +3695,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       i := i + 1
     END;
 
-    Write4(R, varsize - tdx * 2);
+    Write4(R, varsize);
     Write4(R, strx);
     i := 0; WHILE i < strx DO Files.WriteByte(R, str[i] MOD 100H); i := i + 1 END;
 
