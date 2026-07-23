@@ -51,6 +51,8 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     maxEnt = 256;          (* max .816 export-table entries *)
     maxMeth = 64;          (* max vtable slots per type *)
     maxVtFix = 512;        (* max vtable-slot loader fixups per module *)
+    maxItab = 128;         (* max distinct (record,interface) itables per module *)
+    maxItabRef = 256;      (* max PtrToIface conversion sites per module *)
     VtableOff = 16;        (* byte offset of vtable[0] in a TD: size(2) +
                               3 ancestors(12) + nofmeth(2). Each slot is a 2-byte
                               absolute in-bank method address filled by the loader. *)
@@ -67,7 +69,10 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
          to pass as param 0, and the dynamic-dispatch flag *)
       isMeth*: BOOLEAN;
       dynDisp*: BOOLEAN;          (* TRUE: dispatch via vtable slot methSlot *)
-      methSlot*: LONGINT;
+      ifaceDisp*: BOOLEAN;        (* TRUE: interface dispatch — receiver + itable
+                                     are re-read from the interface designator in
+                                     rcv*, and the vtable slot from itable[methSlot] *)
+      methSlot*: LONGINT;         (* vtable slot (dynDisp) or itable index (ifaceDisp) *)
       rcvMode*, rcvA*, rcvB*, rcvR*: LONGINT;
       rcvRdo*: BOOLEAN;
       rcvType*: ORB.Type
@@ -100,6 +105,12 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     vtFixC: INTEGER;
     slotMeth: ARRAY maxMeth OF ORB.Object;        (* method per vtable slot *)
     slotMno: ARRAY maxMeth OF LONGINT;            (* its defining type's mno *)
+    itabRec, itabIfc: ARRAY maxItab OF ORB.Type;  (* per-(record,interface) itables *)
+    itabOff: ARRAY maxItab OF LONGINT;            (* var-relative offset, set in GenTDs *)
+    itabC: INTEGER;
+    itabRefLoc: ARRAY maxItabRef OF LONGINT;      (* PtrToIface sites needing an offset *)
+    itabRefIdx: ARRAY maxItabRef OF INTEGER;
+    itabRefC: INTEGER;
     fpFixups: ARRAY FP_OPS, maxFPFixups OF LONGINT;
     fpFixupCount: ARRAY FP_OPS OF INTEGER;
     fpSubAddr: ARRAY FP_OPS OF LONGINT;
@@ -397,11 +408,38 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     RETURN OCG.Here() - 1
   END emitFwdBranch;
 
+  (* Load two consecutive words at byte offset `off` of the interface value
+     designated by (mode,a,b,r) into RegAddr(dst)/dst+1. Var/Par only. *)
+  PROCEDURE loadIfacePair(mode, a, b, r, off, dst: LONGINT);
+    VAR sb: LONGINT;
+  BEGIN
+    Set16(TRUE, TRUE);
+    IF (mode = ORB.Var) & (r <= 0) THEN
+      sb := GetSB(r);
+      OCG.Gen(OCG.LDY, OCG.mImm, a + off, 0);
+      OCG.Gen(OCG.LDA, OCG.mDPIndY, sb, 0);
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(dst), 0);
+      OCG.Gen(OCG.LDY, OCG.mImm, a + off + 2, 0);
+      OCG.Gen(OCG.LDA, OCG.mDPIndY, sb, 0);
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(dst + 1), 0)
+    ELSE   (* local Var or by-value Par: stack-frame relative *)
+      OCG.Gen(OCG.LDA, OCG.mSR, a + off + frame, 0);
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(dst), 0);
+      OCG.Gen(OCG.LDA, OCG.mSR, a + off + 2 + frame, 0);
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(dst + 1), 0)
+    END
+  END loadIfacePair;
+
   (* --- load: materialize item x into register(s), leaving x in Reg mode --- *)
   PROCEDURE load(VAR x: Item);
     VAR perAddr, perOp, mno, exno, encoded, sb, falseChain: LONGINT;
   BEGIN
-    IF x.mode # Reg THEN
+    IF (x.mode # Reg) & (x.type # NIL) & (x.type.form = ORB.Intfc) THEN
+      (* fat value {data, itable}: 4 words from the designator *)
+      loadIfacePair(x.mode, x.a, x.b, x.r, 0, RH);
+      loadIfacePair(x.mode, x.a, x.b, x.r, 4, RH + 2);
+      x.mode := Reg; x.r := RH; incR; incR; incR; incR
+    ELSIF x.mode # Reg THEN
       IF x.mode = ORB.Const THEN
         IF (x.type.form = ORB.NilTyp) OR (x.type.form = ORB.Pointer) THEN
           Set16(TRUE, TRUE);
@@ -744,7 +782,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
 
   PROCEDURE MakeItem*(VAR x: Item; y: ORB.Object; curlev: LONGINT);
   BEGIN
-    x.isMeth := FALSE; x.dynDisp := FALSE;   (* clear stale OO state on reuse *)
+    x.isMeth := FALSE; x.dynDisp := FALSE; x.ifaceDisp := FALSE;   (* clear stale OO state on reuse *)
     x.mode := y.class; x.type := y.type; x.a := y.val; x.rdo := y.rdo;
     IF y.class = ORB.Par THEN x.b := 0
     ELSIF (y.class = ORB.Const) & (y.type.form = ORB.String) THEN x.b := y.lev
@@ -1028,6 +1066,23 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     END
   END fillVt;
 
+  (* Fill an itable: entry k (k = interface method's index m.val) holds the
+     record's vtable slot for the method of the same name. Slot indices are
+     stable across overrides, so this constant table works for every extension
+     hidden behind the interface, from any module. *)
+  PROCEDURE fillItab(ifc, rec: ORB.Type; nm, vtword: LONGINT);
+    VAR m, rm: ORB.Object;
+  BEGIN
+    m := ifc.meth;
+    WHILE m # NIL DO
+      IF (m.val >= 0) & (m.val < nm) THEN
+        rm := ORB.FindMeth(rec, m.name);
+        IF rm # NIL THEN data[vtword + m.val] := rm.val END
+      END;
+      m := m.next
+    END
+  END fillItab;
+
   (* Generate every recorded descriptor into data[], placed at var-relative
      offset tdBase = varsize + strx (after the variables and strings), and
      patch the forward T.len references. Called from Close. *)
@@ -1087,12 +1142,30 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       data[dcw] := 0FFFFH; dcw := dcw + 1;
       i := i + 1
     END;
+    (* interface itables: for each (record, interface), one 2-byte entry per
+       interface method holding the record's vtable slot for that method
+       (indices, so overrides and cross-module callers stay correct). *)
+    i := 0;
+    WHILE i < itabC DO
+      itabOff[i] := tdBase + dcw * 2;
+      nm := itabIfc[i].nofmeth;
+      s := 0; WHILE s < nm DO data[dcw + s] := 0; s := s + 1 END;
+      fillItab(itabIfc[i], itabRec[i], nm, dcw);
+      dcw := dcw + nm;
+      i := i + 1
+    END;
     tdx := dcw;
     IF tdx >= maxTD THEN ORS.Mark("too many record types"); tdx := 0 END;
     i := 0;
     WHILE i < tdRefC DO
       OCG.Patch(tdRefLoc[i], tdRefTyp[i].len MOD 100H);
       OCG.Patch(tdRefLoc[i] + 1, tdRefTyp[i].len DIV 100H MOD 100H);
+      i := i + 1
+    END;
+    i := 0;
+    WHILE i < itabRefC DO
+      OCG.Patch(itabRefLoc[i], itabOff[itabRefIdx[i]] MOD 100H);
+      OCG.Patch(itabRefLoc[i] + 1, itabOff[itabRefIdx[i]] DIV 100H MOD 100H);
       i := i + 1
     END
   END GenTDs;
@@ -2159,7 +2232,15 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   PROCEDURE PrepCall*(VAR x: Item; VAR r: LONGINT);
     VAR rcv: Item;
   BEGIN
-    IF x.isMeth & ((x.rcvMode = Reg) OR (x.rcvMode = RegI)) THEN
+    IF x.ifaceDisp THEN
+      (* interface dispatch: save outer context, then load the fat value's data
+         word (the object pointer) from the interface designator as param 0.
+         Call re-reads the itable from the same designator. *)
+      r := RH;
+      IF RH > 0 THEN SaveRegs(RH); RH := 0 END;
+      loadIfacePair(x.rcvMode, x.rcvA, x.rcvB, x.rcvR, 0, 0);
+      RH := 2
+    ELSIF x.isMeth & ((x.rcvMode = Reg) OR (x.rcvMode = RegI)) THEN
       (* receiver already in registers [rcvR, rcvR+1] — a DeRef'd pointer
          (dynamic dispatch / SUPER) or a freshly-allocated instance (a
          constructor). Save the outer context below it, keep the receiver,
@@ -2192,7 +2273,52 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     VAR mno, exno, encoded, addrReg, bankReg: LONGINT; wide: BOOLEAN;
   BEGIN
     Set16(TRUE, TRUE);
-    IF x.dynDisp THEN
+    IF x.ifaceDisp THEN
+      (* interface dispatch: receiver (data) already in R0/R1. Re-read the
+         itable from the interface designator, index it by the interface method
+         index (methSlot) to get the record's vtable slot, then dispatch through
+         the object's vtable exactly like dynamic dispatch (runtime slot). *)
+      addrReg := RegAddr(RH);
+      loadIfacePair(x.rcvMode, x.rcvA, x.rcvB, x.rcvR, 4, RH + 6);  (* itable ptr *)
+      OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(RH + 6), 0);
+      OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+      OCG.Gen(OCG.ADC, OCG.mImm, x.methSlot * 2, 0);
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 8), 0);
+      OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(RH + 7), 0);
+      OCG.Gen(OCG.ADC, OCG.mImm, 0, 0);
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 9), 0);
+      OCG.Gen(OCG.LDA, OCG.mDPIndL, RegAddr(RH + 8), 0);   (* slot index *)
+      OCG.Gen(OCG.ASL, OCG.mAcc, 0, 0);                    (* *2 *)
+      OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+      OCG.Gen(OCG.ADC, OCG.mImm, VtableOff, 0);            (* vtable byte offset *)
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 8), 0);
+      OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(0), 0);            (* tag ptr = data - 4 *)
+      OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+      OCG.Gen(OCG.SBC, OCG.mImm, 4, 0);
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 2), 0);
+      OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(1), 0);
+      OCG.Gen(OCG.SBC, OCG.mImm, 0, 0);
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 3), 0);
+      OCG.Gen(OCG.LDA, OCG.mDPIndL, RegAddr(RH + 2), 0);   (* TD addr lo *)
+      OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+      OCG.Gen(OCG.ADC, OCG.mDP, RegAddr(RH + 8), 0);       (* + vtable byte offset *)
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 4), 0);
+      OCG.Gen(OCG.LDY, OCG.mImm, 2, 0);
+      OCG.Gen(OCG.LDA, OCG.mDPIndLY, RegAddr(RH + 2), 0);  (* TD bank *)
+      OCG.Gen(OCG.ADC, OCG.mImm, 0, 0);
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 5), 0);
+      OCG.Gen(OCG.LDA, OCG.mDPIndL, RegAddr(RH + 4), 0);   (* method address *)
+      OCG.Gen(OCG.STA, OCG.mDP, addrReg, 0);
+      OCG.Gen(OCG.PHK, OCG.mImpl, 0, 0);
+      OCG.Gen(OCG.PER, OCG.mImm, 09H, 0);
+      Set8(TRUE, FALSE);
+      OCG.Gen(OCG.PHK, OCG.mImpl, 0, 0);
+      Set16(TRUE, FALSE);
+      OCG.Gen(OCG.LDA, OCG.mDP, addrReg, 0);
+      OCG.Gen(OCG.DEC, OCG.mAcc, 0, 0);
+      OCG.Gen(OCG.PHA, OCG.mImpl, 0, 0);
+      OCG.Gen(OCG.RTL, OCG.mImpl, 0, 0)
+    ELSIF x.dynDisp THEN
       (* dynamic dispatch: receiver (object pointer) is param 0 in R0/R1.
          tag := [obj-4]; addr := [tag + VtableOff + slot*2] — the loader has
          already filled that slot with the method's absolute in-bank address,
@@ -2368,6 +2494,15 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
           OCG.Gen(OCG.STA, OCG.mSR, param.val, 0);
           OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(r + 1), 0);
           OCG.Gen(OCG.STA, OCG.mSR, param.val + 2, 0)
+        ELSIF param.type.form = ORB.Intfc THEN
+          OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(r), 0);
+          OCG.Gen(OCG.STA, OCG.mSR, param.val, 0);
+          OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(r + 1), 0);
+          OCG.Gen(OCG.STA, OCG.mSR, param.val + 2, 0);
+          OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(r + 2), 0);
+          OCG.Gen(OCG.STA, OCG.mSR, param.val + 4, 0);
+          OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(r + 3), 0);
+          OCG.Gen(OCG.STA, OCG.mSR, param.val + 6, 0)
         ELSE
           MakeItem(paramItem, param, param.lev);
           regItem.mode := Reg; regItem.type := param.type;
@@ -2379,6 +2514,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         ELSIF (param.class = ORB.Par) & (param.type.form = ORB.Record) THEN
           r := r + 4
         ELSIF param.class = ORB.Par THEN r := r + 2
+        ELSIF param.type.form = ORB.Intfc THEN r := r + 4
         ELSIF param.type.size <= 2 THEN r := r + 1
         ELSE r := r + 2
         END;
@@ -2940,6 +3076,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     tdx := 0; strx := 0; RH := 0; forDepth := 0;
     fixorgP := 0; fixorgD := 0; fixorgT := 0;
     tdFixupC := 0; tdListC := 0; tdRefC := 0; vtFixC := 0;
+    itabC := 0; itabRefC := 0;
     FOR i := 0 TO FP_OPS - 1 DO fpFixupCount[i] := 0 END;
     check := v # 0; version := v;
     IF v = 0 THEN
@@ -4050,20 +4187,115 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     x.b := 1  (* init bodies are methods: far/RTL convention, reach via JSL *)
   END InitItem;
 
+  (* Find or create the itable for (rec, ifc); returns its index. Deduped so
+     repeated conversions of the same pair share one table. *)
+  PROCEDURE RegisterItable(rec, ifc: ORB.Type): INTEGER;
+    VAR i: INTEGER;
+  BEGIN i := 0;
+    WHILE (i < itabC) & ~((itabRec[i] = rec) & (itabIfc[i] = ifc)) DO i := i + 1 END;
+    IF i = itabC THEN
+      IF itabC < maxItab THEN
+        itabRec[i] := rec; itabIfc[i] := ifc; itabC := itabC + 1
+      ELSE ORS.Mark("too many itables"); i := 0
+      END
+    END;
+    RETURN i
+  END RegisterItable;
+
+  (* Emit `ADC #itable_offset` for itable idx, as a forward fixup patched in
+     GenTDs (the offset isn't known until descriptors are laid out). *)
+  PROCEDURE emitItabOffset(idx: INTEGER);
+  BEGIN
+    OCG.Gen(OCG.ADC, OCG.mImm, 0, 0);
+    IF itabRefC < maxItabRef THEN
+      itabRefLoc[itabRefC] := OCG.Here() - 2; itabRefIdx[itabRefC] := idx;
+      itabRefC := itabRefC + 1
+    ELSE ORS.Mark("too many itable refs")
+    END
+  END emitItabOffset;
+
+  (* Designator `i.m` for an interface value i: stash i's designator so PrepCall
+     can pass its data word as the receiver and Call can re-read the itable and
+     the vtable slot itable[m.val]. The value stays in memory, so this nests. *)
   PROCEDURE IfaceMethodItem*(VAR x: Item; m: ORB.Object);
-  BEGIN ORS.Mark("interfaces not implemented on 65C816 yet")
+  BEGIN
+    IF (x.mode # ORB.Var) & (x.mode # ORB.Par) THEN
+      ORS.Mark("interface receiver must be a variable or parameter")
+    END;
+    x.rcvMode := x.mode; x.rcvA := x.a; x.rcvB := x.b; x.rcvR := x.r;
+    x.rcvType := x.type;
+    x.isMeth := TRUE; x.dynDisp := FALSE; x.ifaceDisp := TRUE;
+    x.methSlot := m.val; x.type := m.type;
+    x.mode := ORB.Const
   END IfaceMethodItem;
 
+  (* pointer (or NIL) -> interface fat value {data, itable} in 4 registers. *)
   PROCEDURE PtrToIface*(VAR x: Item; ift: ORB.Type);
-  BEGIN ORS.Mark("interfaces not implemented on 65C816 yet")
+    VAR idx, r0: INTEGER;
+  BEGIN
+    IF (x.type = NIL) OR (x.type.form # ORB.Pointer) THEN
+      Set16(TRUE, TRUE); r0 := RH;
+      OCG.Gen(OCG.STZ, OCG.mDP, RegAddr(RH), 0);
+      OCG.Gen(OCG.STZ, OCG.mDP, RegAddr(RH + 1), 0);
+      OCG.Gen(OCG.STZ, OCG.mDP, RegAddr(RH + 2), 0);
+      OCG.Gen(OCG.STZ, OCG.mDP, RegAddr(RH + 3), 0);
+      incR; incR; incR; incR
+    ELSE
+      load(x);                    (* pointer (data) now in R[x.r], R[x.r+1] *)
+      idx := RegisterItable(x.type.base, ift);
+      Set16(TRUE, TRUE);
+      OCG.Gen(OCG.LDA, OCG.mDP, SB_DP, 0);
+      OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+      emitItabOffset(idx);        (* A := SB + itable_offset *)
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH), 0);
+      OCG.Gen(OCG.LDA, OCG.mDP, BANK_DP, 0);
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 1), 0);
+      r0 := x.r; incR; incR
+    END;
+    x.mode := Reg; x.r := r0; x.type := ift; x.b := 0; x.rdo := FALSE
   END PtrToIface;
 
+  (* interface-var := interface-value: copy all four words. *)
   PROCEDURE StoreIface*(VAR x, y: Item);
-  BEGIN ORS.Mark("interfaces not implemented on 65C816 yet")
+    VAR sb, k: LONGINT;
+  BEGIN
+    load(y);   (* fat value in R[y.r .. y.r+3] *)
+    Set16(TRUE, TRUE);
+    IF (x.mode = ORB.Var) & (x.r <= 0) THEN
+      sb := GetSB(x.r); k := 0;
+      WHILE k < 4 DO
+        OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(y.r + k), 0);
+        OCG.Gen(OCG.LDY, OCG.mImm, x.a + k * 2, 0);
+        OCG.Gen(OCG.STA, OCG.mDPIndY, sb, 0);
+        k := k + 1
+      END
+    ELSE   (* local Var or Par: stack-frame relative *)
+      k := 0;
+      WHILE k < 4 DO
+        OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(y.r + k), 0);
+        OCG.Gen(OCG.STA, OCG.mSR, x.a + k * 2 + frame, 0);
+        k := k + 1
+      END
+    END;
+    RH := y.r
   END StoreIface;
 
+  (* = / # on interface values: compare the data words (word 0). One side may
+     be NIL (a plain zero pointer/nil). Result is a Cond item. *)
   PROCEDURE IfaceRelation*(op: INTEGER; VAR x, y: Item);
-  BEGIN ORS.Mark("interfaces not implemented on 65C816 yet")
+  BEGIN
+    (* both sides materialize with their data word first (a 4-word fat value or
+       a 2-word pointer/NIL), so comparing words 0..1 compares the references *)
+    load(x); load(y);
+    Set16(TRUE, TRUE);
+    OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(x.r), 0);
+    OCG.Gen(OCG.EOR, OCG.mDP, RegAddr(y.r), 0);
+    OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r), 0);
+    OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(x.r + 1), 0);
+    OCG.Gen(OCG.EOR, OCG.mDP, RegAddr(y.r + 1), 0);
+    OCG.Gen(OCG.ORA, OCG.mDP, RegAddr(x.r), 0);
+    RH := x.r; x.type := ORB.boolType;
+    IF op = ORS.eql THEN SetCC(x, EQ) ELSE SetCC(x, NE) END
   END IfaceRelation;
 
   PROCEDURE Init*;
