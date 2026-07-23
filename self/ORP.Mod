@@ -2072,6 +2072,7 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
       END;
       IF ORS.errcnt = 0 THEN
         ORB.SetVarSize(dc);
+        ORG.FinalizeTDs;   (* assign deferred record T.len before the .smb is written *)
         ORB.Export(modid, newSF, key);
         IF newSF THEN Out.WriteString(" new symbol file") END
       END;

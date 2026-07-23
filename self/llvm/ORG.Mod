@@ -90,6 +90,8 @@ MODULE ORG; (* Interface to the LLVM code generator (DDR C-bridge module).
   (* --- types --- *)
   PROCEDURE BuildTD*(T: ORB.Type; VAR dc: LONGINT);
   BEGIN END BuildTD;
+  PROCEDURE FinalizeTDs*;   (* 816 assigns deferred TD offsets here; LLVM: no-op *)
+  BEGIN END FinalizeTDs;
   PROCEDURE TypeTest*(VAR x: Item; T: ORB.Type; varpar, isguard: BOOLEAN);
   BEGIN END TypeTest;
 
