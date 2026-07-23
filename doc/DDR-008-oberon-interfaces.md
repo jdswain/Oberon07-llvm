@@ -86,7 +86,7 @@ Because conformance is declared and checked where the record is defined, the com
 
 ## 6. Deferred sub-decision — runtime representation (ABI)
 
-**Status:** Deferred; not blocking; may differ per backend.
+**Status:** Resolved 2026-07 — both backends use **fat pointers**; see the resolution note at the end of this section.
 
 How an interface reference is represented at runtime is left open, because it is pure ABI — invisible in source, **not** signature-shaping, and therefore safe to decide after libraries exist. The two classic options:
 
@@ -98,6 +98,17 @@ Guidance:
 - **65C816 backend:** genuine tension — two-word references cost scarce memory and zero-page pressure, while the per-call lookup costs scarce cycles. Decide on measurement.
 
 Because this is ABI only, **the two backends need not agree**, and no library source changes when the choice is flipped.
+
+### Resolution (2026-07)
+
+Both backends adopted the **fat pointer**, but with a representation that sidesteps the 816's per-call-lookup worry without paying for per-record method-table pointers:
+
+- The fat value is `{ data, itable }`. `data` is the object pointer; `itable` points at a per-`(record, interface)` constant table of **vtable slot indices** — *not* function pointers.
+- Dispatch is `data → tag → vtable[ itable[k] ]`: two indexed loads, no search. The itable is a compile-time constant (indices are position-independent because overrides keep their slots, DDR-001), so conversion `pointer → interface` is free and one itable serves every extension and every module.
+- **LLVM:** `IntfcSize = 16` (two native pointers); itables are `[n × i32]` internal globals.
+- **65C816:** `IntfcSize = 8` (data addr+bank, itable addr+bank). itables live in the module's data area alongside type descriptors; a conversion sets `itable := static_base + offset` at runtime, so the value is relocation-free yet carries an absolute address any module can dispatch through (all modules share one bank). This spends the two-word reference the §6 tension flagged, but buys back the per-call *lookup* entirely — dispatch is the same two loads as a plain method call. The memory cost was judged acceptable against the cycle cost of a lookup-per-call on a 16-bit machine.
+
+The two ABIs still need not agree, and this note changes no interface source.
 
 ---
 
