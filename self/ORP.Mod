@@ -1500,13 +1500,13 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
   END Type0;
 
   PROCEDURE Declarations(VAR varsize: LONGINT; parblksize: LONGINT);
-    VAR obj, first: ORB.Object;
+    VAR obj, first, tobj: ORB.Object;
       x: ORG.Item;
-      tp: ORB.Type;
+      tp, arrtyp: ORB.Type;
       ptbase: PtrBase;
       expo: BOOLEAN;
       id: ORS.Ident;
-      reorderOfs: LONGINT;
+      reorderOfs, cstart, ccount, cval: LONGINT;
       p: ORB.Object;
   BEGIN
     (*sync*)
@@ -1523,14 +1523,49 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
         ORS.Get(sym);
         CheckExport(expo);
         IF sym = ORS.eql THEN ORS.Get(sym) ELSE ORS.Mark("= ?") END;
-        expression(x);
-        IF (x.type.form = ORB.String) & (x.b = 2) THEN ORG.StrToChar(x) END;
-        ORB.NewObj(obj, id, ORB.Const);
-        obj.expo := expo;
-        IF x.mode = ORB.Const THEN
-          obj.val := x.a; obj.lev := x.b; obj.type := x.type
+        IF sym = ORS.array THEN
+          (* structured array constant: ARRAY OF <basetype> { c, c, ... }.
+             The elements are emitted into the module data (string) section;
+             the Const object carries that offset and an Array type, so it is
+             read-only indexed like any other array. Element type must be
+             1 or 2 bytes (BYTE/CHAR/INTEGER). *)
+          ORS.Get(sym); Check(ORS.of, "OF?");
+          qualident(tobj);
+          IF tobj.class = ORB.Typ THEN tp := tobj.type
+          ELSE ORS.Mark("not a type"); tp := ORB.intType END;
+          cstart := ORG.StrOffset(); ccount := 0;
+          IF sym = ORS.lbrace THEN
+            ORS.Get(sym);
+            WHILE (sym # ORS.rbrace) & (sym # ORS.eof) DO
+              expression(x);
+              IF x.mode = ORB.Const THEN cval := x.a
+              ELSE ORS.Mark("not a constant"); cval := 0 END;
+              IF tp.size = 1 THEN ORG.PutByte(cval)
+              ELSIF tp.size = 2 THEN
+                ORG.PutByte(cval); ORG.PutByte(cval DIV 100H)
+              ELSE ORS.Mark("element type must be 1 or 2 bytes") END;
+              INC(ccount);
+              IF sym = ORS.comma THEN ORS.Get(sym)
+              ELSIF sym # ORS.rbrace THEN ORS.Mark(", or } expected") END
+            END;
+            Check(ORS.rbrace, "} expected")
+          ELSE ORS.Mark("{ expected") END;
+          NEW(arrtyp); arrtyp.form := ORB.Array; arrtyp.base := tp;
+          arrtyp.len := ccount; arrtyp.size := ccount * tp.size;
+          ORB.NewObj(obj, id, ORB.Const);
+          obj.expo := expo; obj.val := cstart;
+          obj.lev := ccount * tp.size; obj.type := arrtyp;
+          IF expo THEN obj.exno := exno; INC(exno) END
         ELSE
-          ORS.Mark("expression not constant"); obj.type := ORB.intType
+          expression(x);
+          IF (x.type.form = ORB.String) & (x.b = 2) THEN ORG.StrToChar(x) END;
+          ORB.NewObj(obj, id, ORB.Const);
+          obj.expo := expo;
+          IF x.mode = ORB.Const THEN
+            obj.val := x.a; obj.lev := x.b; obj.type := x.type
+          ELSE
+            ORS.Mark("expression not constant"); obj.type := ORB.intType
+          END
         END;
         Check(ORS.semicolon, "; missing")
       END
