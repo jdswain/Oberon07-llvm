@@ -538,6 +538,55 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
     END
   END set;
 
+  (* field named `name` anywhere along rec's base chain (fld.val is its byte
+     offset within the whole record, inherited or own) *)
+  PROCEDURE FindField(rec: ORB.Type; name: ORS.Ident): ORB.Object;
+    VAR fld, res: ORB.Object;
+  BEGIN res := NIL;
+    WHILE (rec # NIL) & (res = NIL) DO
+      fld := rec.dsc;
+      WHILE (fld # NIL) & (fld.name # name) DO fld := fld.next END;
+      IF fld # NIL THEN res := fld END;
+      rec := rec.base
+    END;
+    RETURN res
+  END FindField;
+
+  (* Record literal (DDR-019): TypeName{ field := const ; … }. Emits the
+     field values into the data section as a zero-filled record image (fields
+     placed by offset, any order), yielding a constant record value. Field
+     values must be constants (a nested record literal is folded in by copying
+     its image); runtime-valued fields are a separate future extension. *)
+  PROCEDURE RecordLiteral(VAR x: ORG.Item; rec: ORB.Type);
+    VAR fld: ORB.Object; v: ORG.Item; start, i: LONGINT; fname: ORS.Ident;
+  BEGIN
+    start := ORG.StrOffset();
+    i := 0; WHILE i < rec.size DO ORG.PutByte(0); i := i + 1 END;
+    ORS.Get(sym);   (* consume { *)
+    WHILE sym = ORS.ident DO
+      ORS.CopyId(fname); ORS.Get(sym);
+      fld := FindField(rec, fname);
+      IF fld = NIL THEN ORS.Mark("unknown field") END;
+      IF sym = ORS.becomes THEN ORS.Get(sym) ELSE ORS.Mark(":= expected") END;
+      expression(v);
+      IF fld # NIL THEN
+        IF v.mode # ORB.Const THEN
+          ORS.Mark("record literal field must be constant")
+        ELSIF ~CompTypes(fld.type, v.type, FALSE) THEN
+          ORS.Mark("field type mismatch")
+        ELSIF (v.type.form = ORB.Record) OR (v.type.form = ORB.Array) THEN
+          ORG.CopyStr(start + fld.val, v.a, fld.type.size)   (* nested aggregate *)
+        ELSE
+          ORG.PatchStr(start + fld.val, v.a, fld.type.size)  (* scalar constant *)
+        END
+      END;
+      IF sym = ORS.semicolon THEN ORS.Get(sym)
+      ELSIF sym # ORS.rbrace THEN ORS.Mark("; or } expected") END
+    END;
+    Check(ORS.rbrace, "} expected");
+    ORG.MakeRecordConst(x, rec, start)
+  END RecordLiteral;
+
   PROCEDURE factor(VAR x: ORG.Item);
     VAR obj: ORB.Object; rx: LONGINT; m: ORB.Object;
   BEGIN
@@ -561,7 +610,9 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
       END
     ELSIF sym = ORS.ident THEN
       qualident(obj);
-      IF obj.class = ORB.SFunc THEN
+      IF (obj.class = ORB.Typ) & (obj.type.form = ORB.Record) & (sym = ORS.lbrace) THEN
+        RecordLiteral(x, obj.type)                (* DDR-019 record literal *)
+      ELSIF obj.class = ORB.SFunc THEN
         StandFunc(x, obj.val, obj.type)
       ELSE
         ORG.MakeItem(x, obj, level);

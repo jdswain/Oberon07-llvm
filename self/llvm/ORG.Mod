@@ -64,6 +64,12 @@ MODULE ORG; (* Interface to the LLVM code generator (DDR C-bridge module).
   BEGIN RETURN 0 END StrOffset;
   PROCEDURE PutByte*(b: INTEGER);
   BEGIN END PutByte;
+  PROCEDURE PatchStr*(off, val, size: LONGINT);
+  BEGIN END PatchStr;
+  PROCEDURE CopyStr*(dstOff, srcOff, size: LONGINT);
+  BEGIN END CopyStr;
+  PROCEDURE MakeRecordConst*(VAR x: Item; typ: ORB.Type; start: LONGINT);
+  BEGIN END MakeRecordConst;
 
   (* --- selectors --- *)
   PROCEDURE Field*(VAR x: Item; y: ORB.Object);

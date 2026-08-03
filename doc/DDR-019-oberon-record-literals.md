@@ -2,7 +2,7 @@
 
 **Author:** Jason Swain
 **Date:** 2026-08-03
-**Status:** **Accepted (syntax + scope).** All five §8 decisions ratified 2026-08-03 (the recommended set: general expression; `:=`; `;`; type prefix required; zero-fill). Small, self-contained language extension; ready to implement.
+**Status:** **Accepted; partially implemented 2026-08-03.** All five §8 decisions ratified (general expression; `:=`; `;`; type prefix required; zero-fill). Implemented: record literals with **constant-valued** fields, usable as a factor value (assignment RHS and — for imported/predeclared types — `CONST`), on the 816; named/out-of-order/partial/nested all work (golden `L3_RecordLit`). Deferred with a clear cause: **runtime-valued** fields (need a temporary the single-pass compiler has no allocator for), same-module `CONST` records (Oberon-07 ordering), and LLVM support. See §9.
 **Relationship to prior records:** Sibling to the **array-literal** extension already implemented (`ARRAY OF BYTE {…}` / `ARRAY OF INTEGER {…}`, const-only, stored in the module data section — 816 today; §5). Evolves the C 816 compiler's *positional* record constant (`RECORD (TypeName) { v1, v2 }`) into a **named-field** form. Interacts with DDR-013 (OO: constructors are the *pointer/heap* construction path; this record is the *value*-record path — §4.4).
 
 ---
@@ -114,4 +114,39 @@ A literal yields a **value**. To fill a heap record, assign a literal to the der
 4. **Type prefix** (§3.3): **required** (elision may be added later as sugar).
 5. **Unmentioned fields** (§4.1): **zero-fill**.
 
-Canonical form: `TypeName{ field := expr ; … }`. Ready to implement (§5).
+Canonical form: `TypeName{ field := expr ; … }`.
+
+## 9. Implementation status (as-built, 2026-08-03)
+
+Parser: `factor` detects a record-type qualident followed by `{` and calls a
+`RecordLiteral` builder (`FindField` resolves each named field along the base
+chain to its offset); the literal emits a zero-filled record image into the
+data section, patching each constant field at its offset, and yields a `Const`
+item. 816 `loadAdr` gained a `Const`-aggregate branch (address = SB + varsize +
+offset), so `StoreStruct`/field access reach it.
+
+**Works now (816):** named fields, any order, partial with zero-fill, nested
+record literals, as an assignment RHS to any addressable record designator, and
+as a `CONST` for imported/predeclared record types. Golden: `L3_RecordLit`.
+Suite 140/142.
+
+**Deferred, each with a specific cause:**
+1. **Runtime-valued fields** (`p := T{x := someVar}`) — the literal is currently
+   built in the data section, so fields must be constants. A general runtime
+   literal needs an *addressable temporary*, which this single-pass compiler has
+   no allocator for (locals are frame-fixed at `Enter`); the clean path is a
+   hardware-stack temp with statement-scoped cleanup, a self-contained follow-up.
+   Per §2.1 this is *ergonomics over field-by-field assignment* (which works
+   today), not the load-bearing capability.
+2. **`CONST` of a same-module record type** — Oberon-07's declaration order is
+   `CONST` then `TYPE`, so a `CONST` cannot name a record type declared in the
+   same module. Only imported/predeclared record types work in a `CONST`. (The
+   capability is intact for library-provided types; same-module constant records
+   would need an ordering relaxation.)
+3. **Nested *array* literal inside a record** — array literals live only in
+   `CONST` position today, not general expression position, so an array-typed
+   field can't yet take a literal. Nested *record* literals do work.
+4. **LLVM backend** — has no const-data section (it uses global constants), so a
+   record literal is a **clean compile error** there (`ORG_MakeRecordConst`
+   Marks and yields a no-backend item; verified no crash), not miscompiled. A
+   struct-global path could add real LLVM support later (§5).

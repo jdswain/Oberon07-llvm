@@ -783,6 +783,24 @@ void ORG_MakeDataItem(ORG_Item *x, ORB_Type *typ, LONGINT offset, LONGINT size) 
 
 LONGINT ORG_StrOffset(void) { return 0; }
 void ORG_PutByte(int b) { (void)b; }
+void ORG_PatchStr(LONGINT off, LONGINT val, LONGINT size) { (void)off; (void)val; (void)size; }
+void ORG_CopyStr(LONGINT dst, LONGINT src, LONGINT size) { (void)dst; (void)src; (void)size; }
+
+// Record/array literals need a constant-data section, which this backend does
+// not have (it uses LLVM global constants). Reject cleanly rather than leave an
+// item with an uninitialised backend (which would crash downstream). A struct-
+// global path could add real support later (DDR-019 §5).
+void ORG_MakeRecordConst(ORG_Item *x, ORB_Type *typ, LONGINT start) {
+    (void)start;
+    ORS_Mark("record literal not supported on this target (no const-data section)");
+    x->mode = ORB_Const;
+    x->type = typ;
+    x->a = 0; x->b = 0; x->r = 0;
+    x->rdo = TRUE;
+    x->orig_type = typ;
+    x->backend = NULL;
+    x->backend2 = NULL;
+}
 
 // Creates (or finds existing) global LLVM variable for an Oberon module-level
 // variable. For imported variables, the module prefix is the owning module's

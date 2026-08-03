@@ -231,7 +231,7 @@ VarParam ValueParam StringParam For0 For1 For2 Snapshot CaseLabel CaseRange
 Here FJump CFJump BJump CBJump Fixup FixOne FixLink PrepCall Call Enter
 Return Increment Include Assert New Pack Unpk Get Put Copy Abs Odd Floor
 Float Ord Len Shift Bitwise UML Bit Adr Open SetDataSize Header Close
-CheckRegs Init""".split()
+CheckRegs Init PatchStr CopyStr MakeRecordConst""".split()
 for n in names:
     body = re.sub(r'\bORG_%s\b' % n, 'ORG__%s' % n, body)
 

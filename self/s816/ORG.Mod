@@ -701,6 +701,17 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         OCG.Gen(OCG.ADC, OCG.mImm, x.a, 0);
         OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r), 0)
       END
+    ELSIF x.mode = ORB.Const THEN
+      (* a constant aggregate (record/array literal) lives in the data
+         section at var-relative offset x.a; its address is SB+varsize+x.a *)
+      Set16(TRUE, TRUE);
+      OCG.Gen(OCG.LDA, OCG.mImm, varsize + x.a, 0);
+      OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+      OCG.Gen(OCG.ADC, OCG.mDP, SB_DP, 0);
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH), 0);
+      OCG.Gen(OCG.LDA, OCG.mDP, BANK_DP, 0);
+      OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 1), 0);
+      x.r := RH; incR; incR
     ELSE ORS.Mark("address error")
     END;
     x.mode := Reg
@@ -779,6 +790,40 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     ELSE ORS.Mark("string space overflow")
     END
   END PutByte;
+
+  (* patch `size` little-endian bytes of `val` at data offset `off` (used by
+     the record-literal builder to place a field's constant value at its
+     offset within an already-reserved, zero-filled record image) *)
+  PROCEDURE PatchStr*(off, val, size: LONGINT);
+    VAR i: LONGINT;
+  BEGIN i := 0;
+    WHILE i < size DO
+      IF off + i < maxStrx THEN str[off + i] := val MOD 100H END;
+      val := val DIV 100H; i := i + 1
+    END
+  END PatchStr;
+
+  (* copy `size` bytes within the data section (a nested const record/array
+     field value already emitted at srcOff is folded into the parent image) *)
+  PROCEDURE CopyStr*(dstOff, srcOff, size: LONGINT);
+    VAR i: LONGINT;
+  BEGIN i := 0;
+    WHILE i < size DO
+      IF (dstOff + i < maxStrx) & (srcOff + i < maxStrx) THEN
+        str[dstOff + i] := str[srcOff + i]
+      END;
+      i := i + 1
+    END
+  END CopyStr;
+
+  (* a constant record/array value living in the data section at offset
+     `start`; loadAdr resolves it to SB + varsize + start (see below) *)
+  PROCEDURE MakeRecordConst*(VAR x: Item; typ: ORB.Type; start: LONGINT);
+  BEGIN
+    x.mode := ORB.Const; x.type := typ; x.a := start; x.b := typ.size;
+    x.r := 0; x.rdo := TRUE; x.origType := typ;
+    x.isMeth := FALSE; x.dynDisp := FALSE; x.ifaceDisp := FALSE
+  END MakeRecordConst;
 
   PROCEDURE MakeItem*(VAR x: Item; y: ORB.Object; curlev: LONGINT);
   BEGIN
