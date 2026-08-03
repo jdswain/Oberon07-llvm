@@ -2,7 +2,7 @@
 
 **Author:** Jason Swain
 **Date:** 2026-08-03
-**Status:** **Accepted; partially implemented 2026-08-03.** All five §8 decisions ratified (general expression; `:=`; `;`; type prefix required; zero-fill). Implemented: record literals with **constant-valued** fields, usable as a factor value (assignment RHS and — for imported/predeclared types — `CONST`), on the 816; named/out-of-order/partial/nested all work (golden `L3_RecordLit`). Deferred with a clear cause: **runtime-valued** fields (need a temporary the single-pass compiler has no allocator for), same-module `CONST` records (Oberon-07 ordering), and LLVM support. See §9.
+**Status:** **Accepted; implemented 2026-08-03** (816; LLVM cleanly rejects). All five §8 decisions ratified (general expression; `:=`; `;`; type prefix required; zero-fill). Implemented: constant-valued literals as a factor value (`CONST` + expression position), and **runtime-valued** literals target-directed on the RHS of an assignment to a `Var`/`Par` record (zero via `StoreStruct` from a zeroed image, then `Field`+`Store` per field, nested-recursive). Named/out-of-order/partial/nested/reassignment all correct (goldens `L3_RecordLit`, `RORun`). Still deferred: `RegI` targets (`arr[i]`, `p^` — need an `ORG`-internal held-address fill), same-module `CONST` records (Oberon-07 `CONST`-before-`TYPE` ordering), and LLVM support. See §9.
 **Relationship to prior records:** Sibling to the **array-literal** extension already implemented (`ARRAY OF BYTE {…}` / `ARRAY OF INTEGER {…}`, const-only, stored in the module data section — 816 today; §5). Evolves the C 816 compiler's *positional* record constant (`RECORD (TypeName) { v1, v2 }`) into a **named-field** form. Interacts with DDR-013 (OO: constructors are the *pointer/heap* construction path; this record is the *value*-record path — §4.4).
 
 ---
@@ -130,14 +130,29 @@ record literals, as an assignment RHS to any addressable record designator, and
 as a `CONST` for imported/predeclared record types. Golden: `L3_RecordLit`.
 Suite 140/142.
 
-**Deferred, each with a specific cause:**
-1. **Runtime-valued fields** (`p := T{x := someVar}`) — the literal is currently
-   built in the data section, so fields must be constants. A general runtime
-   literal needs an *addressable temporary*, which this single-pass compiler has
-   no allocator for (locals are frame-fixed at `Enter`); the clean path is a
-   hardware-stack temp with statement-scoped cleanup, a self-contained follow-up.
-   Per §2.1 this is *ergonomics over field-by-field assignment* (which works
-   today), not the load-bearing capability.
+**Runtime-valued fields — implemented (2026-08-03), target-directed.** A record
+literal on the RHS of an assignment fills the LHS *in place* rather than
+producing a value: `RecordLitInto(target, rec)` zeroes the target via
+`StoreStruct` from a zeroed data-section image (strict zero-fill, §4.1), then
+`Field` + `Store`/`StoreStruct`/`StoreIface` per named field, recursing for
+nested literals. No temporary and no held register — each `Field`/`Store`
+re-derives a `Var` address, inheriting `Store`'s register discipline. Detected
+by peeking the RHS with `ORB.thisObj()` (non-consuming) for a record type. Works
+for **`Var`/`Par` targets** (`p := …`, `p.sub := …`, a record parameter):
+runtime field values, out-of-order, partial (zero-filled), nested-with-runtime,
+and reassignment all correct. (Bug found in bring-up: the backend `Field` does
+not set `Item.type`, so the caller must `fi.type := fld.type` after it — else
+the zero-image `StoreStruct` uses the *record's* size and over-writes adjacent
+memory.)
+
+**Still deferred, each with a specific cause:**
+1. **`RegI` targets** (`arr[i] := T{…}`, `p^ := T{…}`) — the target address is a
+   computed value in a register that must survive the zero + N field stores, but
+   `Store` frees a `RegI` base and `loadAdr` mutates it in place, and that
+   held-address discipline lives *inside* `ORG` (the parser only has the exported
+   ops). Needs an `ORG`-internal held-address fill primitive (`rsav := RH` … inline
+   writes … `RH := rsav`). Currently a clean "record literal target must be a
+   variable or field" error.
 2. **`CONST` of a same-module record type** — Oberon-07's declaration order is
    `CONST` then `TYPE`, so a `CONST` cannot name a record type declared in the
    same module. Only imported/predeclared record types work in a `CONST`. (The

@@ -587,6 +587,58 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
     ORG.MakeRecordConst(x, rec, start)
   END RecordLiteral;
 
+  (* Target-directed record literal (DDR-019 runtime form): fill an existing
+     Var/Par record `target` in place. Reuses StoreStruct-from-a-zero-image to
+     zero it (strict zero-fill), then Field + Store per named field (any order,
+     runtime values allowed, nested literals recurse). No temporary and no held
+     register: each Field/Store re-derives a Var address, so the register
+     discipline is inherited from Store. RegI targets (arr[i], p^) are not yet
+     handled — they need an ORG-internal held-address fill. *)
+  PROCEDURE RecordLitInto(target: ORG.Item; rec: ORB.Type);
+    VAR fld, vobj: ORB.Object; fi, v, zi: ORG.Item; start, i: LONGINT;
+      fname: ORS.Ident;
+  BEGIN
+    IF (target.mode # ORB.Var) & (target.mode # ORB.Par) THEN
+      ORS.Mark("record literal target must be a variable or field")
+    END;
+    start := ORG.StrOffset();                       (* zeroed image of rec *)
+    i := 0; WHILE i < rec.size DO ORG.PutByte(0); i := i + 1 END;
+    ORG.MakeRecordConst(zi, rec, start);
+    fi := target; ORG.StoreStruct(fi, zi);          (* zero the target *)
+    ORS.Get(sym);                                   (* consume { *)
+    WHILE sym = ORS.ident DO
+      ORS.CopyId(fname); ORS.Get(sym);
+      fld := FindField(rec, fname);
+      IF fld = NIL THEN ORS.Mark("unknown field") END;
+      IF sym = ORS.becomes THEN ORS.Get(sym) ELSE ORS.Mark(":= expected") END;
+      vobj := NIL;
+      IF sym = ORS.ident THEN vobj := ORB.thisObj() END;
+      IF (fld # NIL) & (vobj # NIL) & (vobj.class = ORB.Typ)
+         & (vobj.type.form = ORB.Record) THEN
+        fi := target; ORG.Field(fi, fld); fi.type := fld.type;   (* nested literal *)
+        qualident(vobj);
+        IF sym = ORS.lbrace THEN RecordLitInto(fi, vobj.type)
+        ELSE ORS.Mark("{ expected") END
+      ELSE
+        expression(v);
+        IF fld # NIL THEN
+          fi := target; ORG.Field(fi, fld); fi.type := fld.type;
+          IF ~CompTypes(fld.type, v.type, FALSE) THEN ORS.Mark("field type mismatch")
+          ELSIF fld.type.form = ORB.Intfc THEN
+            IF v.type.form # ORB.Intfc THEN ORG.PtrToIface(v, fld.type) END;
+            ORG.StoreIface(fi, v)
+          ELSIF (fld.type.form <= ORB.Pointer) OR (fld.type.form = ORB.Proc) THEN
+            ORG.Store(fi, v)
+          ELSE ORG.StoreStruct(fi, v)
+          END
+        END
+      END;
+      IF sym = ORS.semicolon THEN ORS.Get(sym)
+      ELSIF sym # ORS.rbrace THEN ORS.Mark("; or } expected") END
+    END;
+    Check(ORS.rbrace, "} expected")
+  END RecordLitInto;
+
   PROCEDURE factor(VAR x: ORG.Item);
     VAR obj: ORB.Object; rx: LONGINT; m: ORB.Object;
   BEGIN
@@ -943,6 +995,13 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
           selector(x);
           IF sym = ORS.becomes THEN  (* assignment *)
             ORS.Get(sym); CheckReadOnly(x);
+            obj := NIL;
+            IF sym = ORS.ident THEN obj := ORB.thisObj() END;
+            IF (obj # NIL) & (obj.class = ORB.Typ) & (obj.type.form = ORB.Record) THEN
+              qualident(obj);   (* DDR-019 record-literal RHS, filled in place *)
+              IF sym = ORS.lbrace THEN RecordLitInto(x, obj.type)
+              ELSE ORS.Mark("{ expected") END
+            ELSE
             expression(y);
             IF CompTypes(x.type, y.type, FALSE) THEN
               IF x.type.form = ORB.Intfc THEN
@@ -967,6 +1026,7 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
               ORG.StrToChar(y); ORG.Store(x, y)
             ELSE ORS.Mark("illegal assignment")
             END
+            END   (* record-literal RHS vs normal expression *)
           ELSIF sym = ORS.eql THEN
             ORS.Mark("should be :="); ORS.Get(sym); expression(y)
           ELSIF sym = ORS.lparen THEN  (* procedure call *)
