@@ -2,7 +2,7 @@
 
 **Author:** Jason Swain
 **Date:** 2026-07-28
-**Status:** **Accepted; first cut implemented 2026-08-04 (LLVM/POSIX only).** The recommendations of §4 are taken: string `network`, opaque+printable `Addr`, `Serve` helper alongside raw `Accept`, TLS/UDP/deadlines deferred. `Streams`, `Net`, and `Net_rt.c` land in `runtime/posix`; a single-process loopback round-trip (`tests/NetTest.Mod`) exercises Listen/Dial/Accept/Read/Write/Close/RemoteAddr end to end. `Serve` is a **serial** accept loop until DDR-014 `Tasks` lands (§3.3). The stream core takes a `(start, len)` window (§7, amends DDR-008) for zero-copy chunked I/O. See §7 for as-built notes.
+**Status:** **Accepted; first cut implemented 2026-08-04 (LLVM/POSIX only).** The recommendations of §4 are taken: string `network`, opaque+printable `Addr`, `Serve` helper alongside raw `Accept`, TLS/UDP/deadlines deferred. `Streams`, `Net`, and `Net_rt.c` land in `runtime/posix`; a single-process loopback round-trip (`tests/NetTest.Mod`) exercises Listen/Dial/Accept/Read/Write/Close/RemoteAddr end to end. `Serve` is now **concurrent** — it `SpawnTask`s a handler per connection over the DDR-014 `Tasks` scheduler (§3.3), and socket I/O yields cooperatively. The stream core takes a `(start, len)` window (§7, amends DDR-008) for zero-copy chunked I/O. See §7 for as-built notes.
 **Relationship to prior records:** Consumes **DDR-010** (`Conn`, `ReadWriteCloser`, `Addr`, deadlines) — this record does **not** redefine those; it produces them. Consumes **DDR-011** (socket/bind/listen/accept/connect primitives) and **DDR-014** (concurrency: the server shape). Its per-runtime backing — especially wasm — is **DDR-016**. Consumed by **DDR-017** (file sync).
 
 ---

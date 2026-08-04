@@ -176,3 +176,29 @@ const char *oc_argv(int i) {
     if (i < 0 || i >= oc_args_argc || oc_args_argv == NULL) return "";
     return oc_args_argv[i];
 }
+
+/* --- I/O readiness seam (DDR-014 §7) ---
+ *
+ * Blocking-capable primitives (Net_rt.c's non-blocking sockets) call
+ * oc_iowait when a syscall reports EAGAIN. With no scheduler linked it just
+ * blocks the whole process on poll() — indistinguishable from a plain
+ * blocking socket, so Net works standalone. When the Tasks scheduler is
+ * linked it installs oc_iowait_hook (via a constructor), and oc_iowait
+ * instead parks the current task and lets other tasks run until fd is ready.
+ *
+ * want: bit 0 = wait readable, bit 1 = wait writable. Returns >0 ready,
+ * 0 timeout (never, here), <0 error. */
+#include <poll.h>
+
+int (*oc_iowait_hook)(int fd, int want) = NULL;
+
+int oc_iowait(int fd, int want) {
+    if (oc_iowait_hook != NULL) return oc_iowait_hook(fd, want);
+    struct pollfd p;
+    p.fd = fd;
+    p.events = 0;
+    if (want & 1) p.events |= POLLIN;
+    if (want & 2) p.events |= POLLOUT;
+    p.revents = 0;
+    return poll(&p, 1, -1);
+}
