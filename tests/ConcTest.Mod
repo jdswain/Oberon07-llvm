@@ -37,14 +37,13 @@ MODULE ConcTest;
   END Server;
 
   PROCEDURE Client;
-    VAR id, n, k: INTEGER; c: Net.Conn; err: Errors.Error; tag: CHAR;
+    VAR id, n, k: INTEGER; c: Net.Conn; err: Errors.Error;
       msg, buf: ARRAY 1 OF BYTE;
   BEGIN
     id := gNextId; INC(gNextId);              (* self-assign an id (no closures) *)
-    tag := CHR(41H + id);                      (* 'A', 'B', 'C' *)
-    msg[0] := ORD(tag);
+    msg[0] := 41H + id;                        (* 'A', 'B', 'C' *)
     c := Net.Dial("tcp", gAddr, err);
-    Out.WriteString("client "); Out.Write(tag);
+    Out.WriteString("client "); Out.Write(CHR(41H + id));
     IF (err = NIL) & (c # NIL) THEN
       k := c.Write(msg, 0, 1);
       n := c.Read(buf, 0, 1);
