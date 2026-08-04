@@ -17,21 +17,21 @@ MODULE NetTest;
   END report;
 
   PROCEDURE dump (tag: ARRAY OF CHAR; VAR buf: ARRAY OF BYTE; n: INTEGER);
-    VAR i: INTEGER;
+    VAR i: INTEGER; ch: CHAR;
   BEGIN
     Out.WriteString(tag); Out.WriteString(" ("); Out.WriteInt(n); Out.WriteString("): ");
-    i := 0; WHILE i < n DO Out.Write(CHR(buf[i])); INC(i) END;
+    i := 0; WHILE i < n DO ch := CHR(buf[i]); Out.Write(ch); INC(i) END;
     Out.Ln
   END dump;
 
   PROCEDURE Run;
     VAR l: Net.Listener; client, server: Net.Conn; a: Net.Addr; err: Errors.Error;
       addr, peer: ARRAY 64 OF CHAR;
-      hello: ARRAY 5 OF BYTE; hi: ARRAY 2 OF BYTE; buf: ARRAY 64 OF BYTE;
+      hello: ARRAY 5 OF BYTE; rep: ARRAY 4 OF BYTE; buf: ARRAY 64 OF BYTE;
       n: INTEGER; ok: BOOLEAN;
   BEGIN
     hello[0] := 68H; hello[1] := 65H; hello[2] := 6CH; hello[3] := 6CH; hello[4] := 6FH; (* "hello" *)
-    hi[0] := 68H; hi[1] := 69H;                                                          (* "hi" *)
+    rep[0] := 3FH; rep[1] := 68H; rep[2] := 69H; rep[3] := 3FH;   (* "?hi?" — reply is the [1,2) window *)
 
     l := Net.Listen("tcp", "127.0.0.1:0", err);
     ok := report("listen", err);
@@ -46,13 +46,13 @@ MODULE NetTest;
         a := server.RemoteAddr(); a.Str(peer);
         Out.WriteString("accepted from "); Out.WriteString(peer); Out.Ln;
 
-        n := client.Write(hello);
+        n := client.Write(hello, 0, LEN(hello));
         Out.WriteString("client wrote "); Out.WriteInt(n); Out.Ln;
-        n := server.Read(buf); dump("server read", buf, n);
+        n := server.Read(buf, 0, LEN(buf)); dump("server read", buf, n);
 
-        n := server.Write(hi);
+        n := server.Write(rep, 1, 2);   (* windowed write: "hi" from offset 1 *)
         Out.WriteString("server wrote "); Out.WriteInt(n); Out.Ln;
-        n := client.Read(buf); dump("client read", buf, n);
+        n := client.Read(buf, 0, LEN(buf)); dump("client read", buf, n);
 
         client.Close(); server.Close()
       END;

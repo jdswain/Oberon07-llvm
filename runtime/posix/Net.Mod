@@ -75,11 +75,11 @@ MODULE Net;
   BEGIN
   END AcceptRaw;
 
-  PROCEDURE ReadRaw* (fd: INTEGER; VAR buf: ARRAY OF BYTE; n: INTEGER): INTEGER;
+  PROCEDURE ReadRaw* (fd: INTEGER; VAR buf: ARRAY OF BYTE; start, len: INTEGER): INTEGER;
   BEGIN RETURN -1
   END ReadRaw;
 
-  PROCEDURE WriteRaw* (fd: INTEGER; buf: ARRAY OF BYTE; n: INTEGER): INTEGER;
+  PROCEDURE WriteRaw* (fd: INTEGER; buf: ARRAY OF BYTE; start, len: INTEGER): INTEGER;
   BEGIN RETURN -1
   END WriteRaw;
 
@@ -156,12 +156,12 @@ MODULE Net;
 
   (* ----- Conn methods ----- *)
 
-  PROCEDURE (c: TCPConn) Read (VAR buf: ARRAY OF BYTE): INTEGER;
-  BEGIN RETURN ReadRaw(c.fd, buf, LEN(buf))
+  PROCEDURE (c: TCPConn) Read (VAR buf: ARRAY OF BYTE; start, len: INTEGER): INTEGER;
+  BEGIN RETURN ReadRaw(c.fd, buf, start, len)
   END Read;
 
-  PROCEDURE (c: TCPConn) Write (buf: ARRAY OF BYTE): INTEGER;
-  BEGIN RETURN WriteRaw(c.fd, buf, LEN(buf))
+  PROCEDURE (c: TCPConn) Write (buf: ARRAY OF BYTE; start, len: INTEGER): INTEGER;
+  BEGIN RETURN WriteRaw(c.fd, buf, start, len)
   END Write;
 
   PROCEDURE (c: TCPConn) Close ();

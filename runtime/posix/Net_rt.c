@@ -115,19 +115,30 @@ void Net__AcceptRaw(int lfd, int *fd, int *res, char *peer, int peer_len) {
     fmt_addr((struct sockaddr *)&ss, sl, peer, peer_len);
 }
 
-int Net__ReadRaw(int fd, uint8_t *buf, int buf_len, int n) {
-    ssize_t r;
-    int m = (n < buf_len) ? n : buf_len;
+/* Clamp a (start, len) window to [0, buf_len]; returns the byte count and
+ * leaves *off at the (bounded) start so the window is buf + *off, m bytes. */
+static int clamp_window(int buf_len, int start, int len, int *off) {
+    int avail, m;
+    if (start < 0) start = 0;
+    if (start > buf_len) start = buf_len;
+    avail = buf_len - start;
+    m = (len < avail) ? len : avail;
     if (m < 0) m = 0;
-    do { r = recv(fd, buf, (size_t)m, 0); } while (r < 0 && errno == EINTR);
+    *off = start;
+    return m;
+}
+
+int Net__ReadRaw(int fd, uint8_t *buf, int buf_len, int start, int len) {
+    ssize_t r;
+    int off, m = clamp_window(buf_len, start, len, &off);
+    do { r = recv(fd, buf + off, (size_t)m, 0); } while (r < 0 && errno == EINTR);
     return (int)r;
 }
 
-int Net__WriteRaw(int fd, uint8_t *buf, int buf_len, int n) {
+int Net__WriteRaw(int fd, uint8_t *buf, int buf_len, int start, int len) {
     ssize_t w;
-    int m = (n < buf_len) ? n : buf_len;
-    if (m < 0) m = 0;
-    do { w = send(fd, buf, (size_t)m, MSG_NOSIGNAL); }
+    int off, m = clamp_window(buf_len, start, len, &off);
+    do { w = send(fd, buf + off, (size_t)m, MSG_NOSIGNAL); }
     while (w < 0 && errno == EINTR);
     return (int)w;
 }
