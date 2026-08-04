@@ -662,7 +662,7 @@ static void StandFunc(ORG_Item *x, LONGINT fct, ORB_Type *restyp) {
             }
         } else if (fct == 5) {  // CHR
             CheckInt(x);
-            ORG_Ord(x);
+            ORG_Chr(x);
         } else if (fct == 6) {  // LEN
             if (x->type->form == ORB_Array) {
                 ORG_Len(x);

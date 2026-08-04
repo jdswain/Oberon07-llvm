@@ -467,7 +467,7 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
         ELSIF (x.type.form = ORB.String) & (x.b = 2) THEN ORG.StrToChar(x)
         ELSE ORS.Mark("bad type")
         END
-      ELSIF fct = 5 THEN CheckInt(x); ORG.Ord(x)       (* CHR *)
+      ELSIF fct = 5 THEN CheckInt(x); ORG.Chr(x)       (* CHR *)
       ELSIF fct = 6 THEN  (* LEN *)
         IF x.type.form = ORB.Array THEN ORG.Len(x)
         ELSE ORS.Mark("not an array")
