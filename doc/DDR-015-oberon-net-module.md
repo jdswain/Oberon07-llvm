@@ -2,7 +2,7 @@
 
 **Author:** Jason Swain
 **Date:** 2026-07-28
-**Status:** **Draft — options open.** The connection *interface* already exists (DDR-010 `Conn`); this record designs the *module* that produces connections and listeners and the server surface on top. Options in §4/§5; author decides.
+**Status:** **Accepted; first cut implemented 2026-08-04 (LLVM/POSIX only).** The recommendations of §4 are taken: string `network`, opaque+printable `Addr`, `Serve` helper alongside raw `Accept`, TLS/UDP/deadlines deferred. `Streams`, `Net`, and `Net_rt.c` land in `runtime/posix`; a single-process loopback round-trip (`tests/NetTest.Mod`) exercises Listen/Dial/Accept/Read/Write/Close/RemoteAddr end to end. `Serve` is a **serial** accept loop until DDR-014 `Tasks` lands (§3.3). See §7 for as-built notes and the one open API question (no-length `Write`).
 **Relationship to prior records:** Consumes **DDR-010** (`Conn`, `ReadWriteCloser`, `Addr`, deadlines) — this record does **not** redefine those; it produces them. Consumes **DDR-011** (socket/bind/listen/accept/connect primitives) and **DDR-014** (concurrency: the server shape). Its per-runtime backing — especially wasm — is **DDR-016**. Consumed by **DDR-017** (file sync).
 
 ---
@@ -89,3 +89,18 @@ The sync use case is stream-oriented (ordered, reliable). *Recommend deferring U
 
 - **DDR-010 →** promote `Addr` from named-but-abstract to the printable interface of 3.2-a; add `Listener` and `Handler` as new interfaces in the same family (non-breaking).
 - **DDR-011 →** unchanged (its socket primitives are exactly what `Dial`/`Listen` lower to on native); note that wasm does **not** provide them (DDR-016).
+
+## 7. As-built (first cut, LLVM/POSIX)
+
+Three source files in `runtime/posix/`:
+
+- **`Streams.Mod`** — the DDR-008/010 stream core as pure interfaces: `Reader`/`Writer`/`Closer`/`ReadWriter`/`ReadWriteCloser`. No implementation, no C sidecar, identical on every backend. This is the home DDR-010 §2 assumed but that had never been written down in code.
+- **`Net.Mod`** — the portable interfaces (`Addr`, `Conn` including `Streams.ReadWriteCloser`, `Listener`, `Handler`) plus `Dial`/`Listen`/`Serve` and the private POSIX backing records (`TCPConn`/`TCPListener`/`NetAddr`). The `*Raw` procedures are weak Oberon stubs; conformance, addressing strings, and the accept loop are all in Oberon.
+- **`Net_rt.c`** — the strong overrides: a thin skin over `getaddrinfo`/`socket`/`bind`/`listen`/`accept`/`connect`/`recv`/`send`/`close`, with `SIGPIPE` ignored and `SO_NOSIGPIPE`/`MSG_NOSIGNAL` where available.
+
+Two Oberon-07 shapes worth recording for the next module in this family:
+
+1. **Import order is significant.** A leaf module (`Errors`, `Streams`) must be listed **before** any module that transitively imports it (`Net`), or the frontend rejects it with *"invalid import order"* — the compiler assigns a module number when it first sees a dependency indirectly, and a later explicit import then collides. So `IMPORT Errors, Net, Out`, never `IMPORT Net, Out, Errors`.
+2. **No method-call chaining on a call result.** `l.Addr().Str(s)` is *"not a procedure"* — a function result is not a designator you can dispatch on. Bind it first: `a := l.Addr(); a.Str(s)`.
+
+**Open API question — `Write` has no length parameter.** Faithful to DDR-008, `Writer.Write(buf: ARRAY OF BYTE): INTEGER` writes `LEN(buf)`, and `Reader.Read(VAR buf): INTEGER` fills up to `LEN(buf)`. Because Oberon-07 has no array slices, this makes *"send the first `n` bytes of a larger buffer"* impossible without copying into an exact-sized array — a real ergonomic cost for framed protocols (DDR-017's sync verbs). Options for a follow-up: (a) keep the DDR-008 signature and let callers size buffers exactly (status quo); (b) add an explicit `n` — `Write(buf: ARRAY OF BYTE; n: INTEGER): INTEGER` / `Read(VAR buf; n)` — a small, Wirthian departure that reads the length off the call rather than the array; (c) introduce a `Buffer` type carrying `{data, len}` and write/read against it. Recommend deciding this before DDR-017, since the sync protocol is the first heavy `Write` user; **(b)** is the lightest fix and does not disturb the interface's shape.
