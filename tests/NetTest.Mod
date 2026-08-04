@@ -17,10 +17,10 @@ MODULE NetTest;
   END report;
 
   PROCEDURE dump (tag: ARRAY OF CHAR; VAR buf: ARRAY OF BYTE; n: INTEGER);
-    VAR i: INTEGER; ch: CHAR;
+    VAR i: INTEGER;
   BEGIN
     Out.WriteString(tag); Out.WriteString(" ("); Out.WriteInt(n); Out.WriteString("): ");
-    i := 0; WHILE i < n DO ch := CHR(buf[i]); Out.Write(ch); INC(i) END;
+    i := 0; WHILE i < n DO Out.Write(CHR(buf[i])); INC(i) END;
     Out.Ln
   END dump;
 
