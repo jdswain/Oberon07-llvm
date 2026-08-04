@@ -2,7 +2,7 @@
 
 **Author:** Jason Swain
 **Date:** 2026-08-04
-**Status:** **Accepted.** Syntax and scope settled; §4 (element-type elision) resolved to **Option A — require the element-type prefix** (2026-08-04). The `{}` bracket carries the whole aggregate family; `[]` is deliberately left unused (reserved for generics).
+**Status:** **Accepted; runtime form implemented 2026-08-04** (816; LLVM rejects). §4 resolved to **Option A — require the element-type prefix**. `[]` reserved for generics. Implemented: runtime `arr := ARRAY OF T {…}` target-directed into a `Var`/`Par` array (scalar, record, and nested-array elements; partial → zero-filled). Golden `L3_ArrayLit`, suite 142/144. Still deferred: array-of-records in `CONST`/expression position (the scalar `CONST` form is unchanged), named array types (`Vec{…}`), and `RegI` array targets (`p^ :=`, `m[i] :=`) — same causes as DDR-019 §9. See §5.
 **Relationship to prior records:** Sibling to **DDR-019** (record literals). It generalises the existing `ARRAY OF BYTE {…}` const-array literal to record/nested elements and to runtime construction, and reuses DDR-019's target-directed `RecordLitInto` machinery. Together they form the `{}` aggregate-literal family.
 
 ---

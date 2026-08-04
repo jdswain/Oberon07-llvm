@@ -639,6 +639,65 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
     Check(ORS.rbrace, "} expected")
   END RecordLitInto;
 
+  (* Target-directed array literal (DDR-020 runtime form): fill a Var/Par array
+     `target` in place from `ARRAY OF elemType { e0, e1, … }`. Zeroes the array
+     (strict zero-fill), then for each element stores into target[k] — a
+     CONSTANT-index target, hence Var mode, so it needs no held-address
+     machinery (DDR-019 §9). Elements name their type (DDR-020 §4, Option A):
+     a record element is `T{…}`, a nested array `ARRAY OF T {…}`, else an
+     expression of the element type. RegI array targets deferred like §DDR-019. *)
+  PROCEDURE ArrayLitInto(target: ORG.Item);
+    VAR el, idx, et, zi: ORG.Item; arrType, elemType: ORB.Type;
+      tobj, vobj: ORB.Object; k, start, i: LONGINT;
+  BEGIN
+    arrType := target.type;
+    IF (target.mode # ORB.Var) & (target.mode # ORB.Par) THEN
+      ORS.Mark("array literal target must be a variable or field")
+    END;
+    ORS.Get(sym); Check(ORS.of, "OF expected");   (* ARRAY OF elemType *)
+    qualident(tobj);
+    IF arrType.form # ORB.Array THEN ORS.Mark("array literal for a non-array"); elemType := ORB.intType
+    ELSE
+      elemType := arrType.base;
+      IF (tobj.class # ORB.Typ) OR ~CompTypes(elemType, tobj.type, FALSE) THEN
+        ORS.Mark("element type mismatch")
+      END
+    END;
+    start := ORG.StrOffset();                      (* zero the whole array *)
+    i := 0; WHILE i < arrType.size DO ORG.PutByte(0); i := i + 1 END;
+    ORG.MakeRecordConst(zi, arrType, start);
+    et := target; ORG.StoreStruct(et, zi);
+    Check(ORS.lbrace, "{ expected");
+    k := 0;
+    WHILE (sym # ORS.rbrace) & (sym # ORS.eot) DO
+      IF k >= arrType.len THEN ORS.Mark("too many array elements") END;
+      et := target; ORG.MakeConstItem(idx, ORB.intType, k);
+      ORG.Index(et, idx); et.type := elemType;     (* et := target[k], constant index -> Var *)
+      vobj := NIL; IF sym = ORS.ident THEN vobj := ORB.thisObj() END;
+      IF (vobj # NIL) & (vobj.class = ORB.Typ) & (vobj.type.form = ORB.Record)
+         & (elemType.form = ORB.Record) THEN
+        qualident(vobj);
+        IF sym = ORS.lbrace THEN RecordLitInto(et, vobj.type) ELSE ORS.Mark("{ expected") END
+      ELSIF (sym = ORS.array) & (elemType.form = ORB.Array) THEN
+        ArrayLitInto(et)
+      ELSE
+        expression(el);
+        IF ~CompTypes(elemType, el.type, FALSE) THEN ORS.Mark("element type mismatch")
+        ELSIF elemType.form = ORB.Intfc THEN
+          IF el.type.form # ORB.Intfc THEN ORG.PtrToIface(el, elemType) END;
+          ORG.StoreIface(et, el)
+        ELSIF (elemType.form <= ORB.Pointer) OR (elemType.form = ORB.Proc) THEN
+          ORG.Store(et, el)
+        ELSE ORG.StoreStruct(et, el)
+        END
+      END;
+      INC(k);
+      IF sym = ORS.comma THEN ORS.Get(sym)
+      ELSIF sym # ORS.rbrace THEN ORS.Mark(", or } expected") END
+    END;
+    Check(ORS.rbrace, "} expected")
+  END ArrayLitInto;
+
   PROCEDURE factor(VAR x: ORG.Item);
     VAR obj: ORB.Object; rx: LONGINT; m: ORB.Object;
   BEGIN
@@ -995,6 +1054,9 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
           selector(x);
           IF sym = ORS.becomes THEN  (* assignment *)
             ORS.Get(sym); CheckReadOnly(x);
+            IF sym = ORS.array THEN
+              ArrayLitInto(x)   (* DDR-020 array-literal RHS, filled in place *)
+            ELSE
             obj := NIL;
             IF sym = ORS.ident THEN obj := ORB.thisObj() END;
             IF (obj # NIL) & (obj.class = ORB.Typ) & (obj.type.form = ORB.Record) THEN
@@ -1027,6 +1089,7 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
             ELSE ORS.Mark("illegal assignment")
             END
             END   (* record-literal RHS vs normal expression *)
+            END   (* array-literal RHS vs the rest *)
           ELSIF sym = ORS.eql THEN
             ORS.Mark("should be :="); ORS.Get(sym); expression(y)
           ELSIF sym = ORS.lparen THEN  (* procedure call *)
@@ -1647,7 +1710,7 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
           cstart := ORG.StrOffset(); ccount := 0;
           IF sym = ORS.lbrace THEN
             ORS.Get(sym);
-            WHILE (sym # ORS.rbrace) & (sym # ORS.eof) DO
+            WHILE (sym # ORS.rbrace) & (sym # ORS.eot) DO
               expression(x);
               IF x.mode = ORB.Const THEN cval := x.a
               ELSE ORS.Mark("not a constant"); cval := 0 END;
