@@ -1,11 +1,12 @@
 MODULE TestHost;
-  IMPORT Out, Modules, TestRunner, Files, FileDir, Env,
+  IMPORT Errors, Out, Modules, TestRunner, Files, FileDir, Env,
          Branch, Loops, Cases, Short, Chain,
          Sets, Reals, Types, Guards, Guards2,
          Arrs, Recs, RecCopy, Strings, StrPass, Open,
          StackRec, ArrPtrs, Arc, ArcCons, Weak, Tree,
          App, Util, Diamond, A, B, Counter, Mix, Math,
-         Repeat, While, For;
+         Repeat, While, For,
+         Methods, MethBase, MethExt, Ctors, Super, Ifaces;
 
   VAR totalPassed, totalFailed: INTEGER;
 
@@ -60,6 +61,11 @@ BEGIN
   RunPlugin("MathTests");
   RunPlugin("FilesTests");
   RunPlugin("EnvTests");
+  RunPlugin("MethodsTests");
+  RunPlugin("CtorsTests");
+  RunPlugin("SuperTests");
+  RunPlugin("IfacesTests");
+  RunPlugin("ErrorsTests");
 
   Out.WriteString("======================="); Out.Ln();
   Out.WriteString("TOTAL: ");

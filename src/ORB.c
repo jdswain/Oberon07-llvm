@@ -120,12 +120,176 @@ ObjectPtr thisimport(ObjectPtr mod) {
 
 ObjectPtr thisfield(TypePtr rec) {
     ObjectPtr fld = rec->dsc;
-    
+
     while ((fld != NULL) && (strcmp(fld->name, ORS_id) != 0)) {
         fld = fld->next;
     }
-    
+
     return fld;
+}
+
+/* Find the type-bound procedure named ORS_id, searching the record's own
+   method list first and then its base chain — so an override shadows the
+   method it replaces. Methods of imported types are visible only when
+   exported; a record's own module sees everything (mno <= 0).
+   Initialisers are skipped: they are reachable only through allocation
+   (type-qualified call), never on an instance (DDR-003). */
+ObjectPtr thismethod(TypePtr rec) {
+    TypePtr t = rec;
+    while (t != NULL) {
+        ObjectPtr m = t->meth;
+        while (m != NULL) {
+            if (!m->initf && (strcmp(m->name, ORS_id) == 0) &&
+                (m->expo || t->mno <= 0)) {
+                return m;
+            }
+            m = m->next;
+        }
+        t = t->base;
+    }
+    return NULL;
+}
+
+/* Find the initialiser named ORS_id for a constructor call T.Name(...).
+   DDR-003 inheritance rule: an extension inherits the base type's
+   initialisers unless it declares its own — so the search stops at the
+   NEAREST level that declares any initialiser (exported or not: a private
+   initialiser still claims responsibility for construction), and the name
+   is resolved among that level's visible ones only. */
+ObjectPtr thisinit(TypePtr rec) {
+    TypePtr t = rec;
+    while (t != NULL) {
+        ObjectPtr m = t->meth;
+        ObjectPtr found = NULL;
+        BOOLEAN declares = FALSE;
+        while (m != NULL) {
+            if (m->initf) {
+                declares = TRUE;
+                if ((strcmp(m->name, ORS_id) == 0) && (m->expo || t->mno <= 0)) {
+                    found = m;
+                }
+            }
+            m = m->next;
+        }
+        if (declares) {
+            return found;
+        }
+        t = t->base;
+    }
+    return NULL;
+}
+
+/* True when the constructor set that governs `rec` (the nearest declaring
+   level, per thisinit) contains at least one initialiser visible from the
+   current module. Used to enforce DDR-003's chaining rule: a derived
+   initialiser must call a base initialiser via SUPER — but only when one
+   is actually reachable; an all-private base set leaves zero-init as the
+   only option and imposes no obligation. */
+BOOLEAN ORB_HasVisibleInits(TypePtr rec) {
+    TypePtr t = rec;
+    while (t != NULL) {
+        ObjectPtr m = t->meth;
+        BOOLEAN declares = false;
+        BOOLEAN visible = false;
+        while (m != NULL) {
+            if (m->initf) {
+                declares = true;
+                if (m->expo || t->mno <= 0) {
+                    visible = true;
+                }
+            }
+            m = m->next;
+        }
+        if (declares) {
+            return visible;
+        }
+        t = t->base;
+    }
+    return false;
+}
+
+/* Interface inclusion, transitively (DDR-008 §4): for interfaces, impl
+   holds the DIRECTLY included interfaces. */
+static BOOLEAN IntfcIncludes(TypePtr d, TypePtr i) {
+    ORB_Impl *im;
+    if (d == i) {
+        return true;
+    }
+    for (im = d->impl; im != NULL; im = im->next) {
+        if (IntfcIncludes(im->intfc, i)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Declared conformance (DDR-008 §5.3): inherited — an extension of a
+   conforming record conforms without re-declaring — and implementing an
+   interface implements everything it includes (its method set is the
+   flattened union, so the obligations are already discharged). */
+BOOLEAN ORB_Conforms(TypePtr rec, TypePtr intfc) {
+    while (rec != NULL) {
+        ORB_Impl *im = rec->impl;
+        while (im != NULL) {
+            if (IntfcIncludes(im->intfc, intfc)) {
+                return true;
+            }
+            im = im->next;
+        }
+        rec = rec->base;
+    }
+    return false;
+}
+
+/* Name-based method lookup over the whole chain, ignoring export status
+   and skipping initialisers. Conformance checking and itable construction
+   use this: a private inherited method may satisfy an interface — its
+   vtable slot dispatches fine, and its mangled symbol travels in the .smb
+   regardless of export. */
+ObjectPtr ORB_FindMeth(TypePtr rec, const char *name) {
+    while (rec != NULL) {
+        ObjectPtr m = rec->meth;
+        while (m != NULL) {
+            if (!m->initf && (strcmp(m->name, name) == 0)) {
+                return m;
+            }
+            m = m->next;
+        }
+        rec = rec->base;
+    }
+    return NULL;
+}
+
+/* True when the record (or an ancestor) declares an initialiser — in
+   which case NEW is forbidden on pointers to it: allocation must go
+   through a constructor so no uninitialised object escapes (DDR-003). */
+BOOLEAN ORB_HasInits(TypePtr rec) {
+    while (rec != NULL) {
+        ObjectPtr m = rec->meth;
+        while (m != NULL) {
+            if (m->initf) {
+                return true;
+            }
+            m = m->next;
+        }
+        rec = rec->base;
+    }
+    return false;
+}
+
+/* Total vtable slot count including inherited methods. nofmeth is only
+   stamped on records that have own methods (or came from a symbol file),
+   and slots strictly grow down the extension chain, so the max over the
+   chain is the true total even for records that only inherit. */
+int ORB_TotalMeths(TypePtr rec) {
+    int n = 0;
+    while (rec != NULL) {
+        if (rec->nofmeth > n) {
+            n = rec->nofmeth;
+        }
+        rec = rec->base;
+    }
+    return n;
 }
 
 void OpenScope(void) {
@@ -316,7 +480,7 @@ static void Write(Files_Rider *R, int x) {
 static void InType(Files_Rider *R, ObjectPtr thismod, TypePtr *T) {
     int32_t key;
     int ref, class, form, np, readonly;
-    ObjectPtr fld, par, obj, mod, last;
+    ObjectPtr fld, par, obj, mod, last, lastmeth;
     TypePtr t;
     char name[ORS_IDENT_LEN], modname[ORS_IDENT_LEN];
     
@@ -337,6 +501,8 @@ static void InType(Files_Rider *R, ObjectPtr thismod, TypePtr *T) {
         }
 
         if (form == ORB_Pointer) {
+            Read(R, &class);
+            t->weak = (class == 1);
             InType(R, thismod, &t->base);
             t->size = 4;
         } else if (form == ORB_Array) {
@@ -355,37 +521,127 @@ static void InType(Files_Rider *R, ObjectPtr thismod, TypePtr *T) {
             Files_ReadNum(R, &t->len);     /* TD adr/exno */
             Files_ReadNum(R, &t->nofpar);  /* ext level */
             Files_ReadNum(R, &t->size);
-            
+            {
+                LONGINT nm;
+                Files_ReadNum(R, &nm);     /* total vtable slots */
+                t->nofmeth = (int)nm;
+            }
+
             Read(R, &class);
             last = NULL;
-            
-            while (class != 0) {  /* Fields */
-                fld = (ObjectPtr)calloc(1, sizeof(ORB_Object));
-                fld->class = class;
-                Files_ReadString(R, fld->name);
-                
-                if (last == NULL) {
-                    t->dsc = fld;
+            lastmeth = NULL;
+
+            while (class != 0) {  /* Fields and methods */
+                if (class == ORB_Meth) {
+                    /* Type-bound procedure. Non-exported methods are
+                       carried too (real name + mangled symbol): they own
+                       vtable slots that importing modules must fill when
+                       building descriptors for extensions. thismethod()
+                       hides them outside the defining module. */
+                    ObjectPtr mth = (ObjectPtr)calloc(1, sizeof(ORB_Object));
+                    char mn[256];
+                    int k;
+                    mth->class = ORB_Meth;
+                    Files_ReadString(R, mth->name);
+                    Read(R, &k);
+                    mth->expo = (k == 1);
+                    Read(R, &k);
+                    mth->initf = (k == 1);
+                    Files_ReadNum(R, &mth->val);   /* vtable slot (-1 for inits) */
+                    Files_ReadString(R, mn);
+                    mth->mname = strdup(mn);
+                    InType(R, thismod, &mth->type);
+                    mth->lev = -thismod->lev;
+                    if (lastmeth == NULL) {
+                        t->meth = mth;
+                    } else {
+                        lastmeth->next = mth;
+                    }
+                    lastmeth = mth;
                 } else {
-                    last->next = fld;
+                    fld = (ObjectPtr)calloc(1, sizeof(ORB_Object));
+                    fld->class = class;
+                    Files_ReadString(R, fld->name);
+
+                    if (last == NULL) {
+                        t->dsc = fld;
+                    } else {
+                        last->next = fld;
+                    }
+                    last = fld;
+
+                    fld->expo = (fld->name[0] != '\0');
+                    /* Always read the field type — this matches the new
+                       OutType that emits every field, so layout is exactly
+                       reconstructed regardless of export. */
+                    InType(R, thismod, &fld->type);
+                    Files_ReadNum(R, &fld->val);
                 }
-                last = fld;
-                
-                fld->expo = (fld->name[0] != '\0');
-                /* Always read the field type — this matches the new
-                   OutType that emits every field, so layout is exactly
-                   reconstructed regardless of export. */
-                InType(R, thismod, &fld->type);
-                Files_ReadNum(R, &fld->val);
                 Read(R, &class);
             }
-            
+
             if (last == NULL) {
                 t->dsc = obj;
             } else {
                 last->next = obj;
             }
+
+            /* Declared interface conformances (DDR-008). */
+            Read(R, &class);
+            {
+                ORB_Impl *lastimpl = NULL;
+                while (class != 0) {
+                    ORB_Impl *im = (ORB_Impl*)calloc(1, sizeof(ORB_Impl));
+                    InType(R, thismod, &im->intfc);
+                    if (lastimpl == NULL) {
+                        t->impl = im;
+                    } else {
+                        lastimpl->next = im;
+                    }
+                    lastimpl = im;
+                    Read(R, &class);
+                }
+            }
+        } else if (form == ORB_Intfc) {
+            t->size = 16;   /* fat pointer { data, itable } */
+            Read(R, &class);
+            lastmeth = NULL;
+            while (class != 0) {
+                ObjectPtr mth = (ObjectPtr)calloc(1, sizeof(ORB_Object));
+                mth->class = ORB_Meth;
+                mth->expo = true;
+                Files_ReadString(R, mth->name);
+                Files_ReadNum(R, &mth->val);
+                InType(R, thismod, &mth->type);
+                mth->lev = -thismod->lev;
+                if (lastmeth == NULL) {
+                    t->meth = mth;
+                } else {
+                    lastmeth->next = mth;
+                }
+                lastmeth = mth;
+                t->nofmeth++;
+                Read(R, &class);
+            }
+            /* Directly included interfaces. */
+            Read(R, &class);
+            {
+                ORB_Impl *lastimpl = NULL;
+                while (class != 0) {
+                    ORB_Impl *im = (ORB_Impl*)calloc(1, sizeof(ORB_Impl));
+                    InType(R, thismod, &im->intfc);
+                    if (lastimpl == NULL) {
+                        t->impl = im;
+                    } else {
+                        lastimpl->next = im;
+                    }
+                    lastimpl = im;
+                    Read(R, &class);
+                }
+            }
         } else if (form == ORB_Proc) {
+            Read(R, &class);               /* method-type flag */
+            t->mthd = (class == 1);
             InType(R, thismod, &t->base);
             obj = NULL;
             np = 0;
@@ -595,6 +851,11 @@ static void OutType(Files_Rider *R, TypePtr t) {
         }
 
         if (t->form == ORB_Pointer) {
+            /* v5: persist the WEAK flag — an imported weak pointer that
+               loses it becomes strong, and records holding it suddenly
+               get ARC field-release treatment (releasing never-retained
+               targets). */
+            Write(R, t->weak ? 1 : 0);
             OutType(R, t->base);
         } else if (t->form == ORB_Array) {
             OutType(R, t->base);
@@ -608,14 +869,17 @@ static void OutType(Files_Rider *R, TypePtr t) {
                 OutType(R, noType);
                 bot = NULL;
             }
-            
+
             /* Write TD byte offset (not exno) so importing modules
                can directly use SB + len for type tag computation */
             Files_WriteNum(R, t->len);
 
             Files_WriteNum(R, t->nofpar);
             Files_WriteNum(R, t->size);
-            
+            /* Total vtable slots incl. inherited — the importer needs it
+               to place new slots when local extensions add methods. */
+            Files_WriteNum(R, ORB_TotalMeths(t));
+
             /* Emit every source-level field with its full type so the
                importing module can reconstruct the record's layout
                exactly. Non-exported fields go out with name="" (empty)
@@ -633,8 +897,57 @@ static void OutType(Files_Rider *R, TypePtr t) {
                 Files_WriteNum(R, fld->val);
                 fld = fld->next;
             }
+            /* Own type-bound procedures, declaration order. Every method
+               goes out — exported or not — with its real name, vtable
+               slot and mangled symbol: extensions compiled elsewhere must
+               fill inherited slots in their descriptors, and the symbol
+               has external linkage regardless of export. The expo byte
+               keeps private methods invisible to source-level lookup. */
+            fld = t->meth;
+            while (fld != NULL) {
+                Write(R, ORB_Meth);
+                Files_WriteString(R, fld->name);
+                Write(R, fld->expo ? 1 : 0);
+                Write(R, fld->initf ? 1 : 0);
+                Files_WriteNum(R, fld->val);
+                Files_WriteString(R, fld->mname ? fld->mname : "");
+                OutType(R, fld->type);
+                fld = fld->next;
+            }
             Write(R, 0);
+            /* Declared interface conformances (DDR-008). */
+            {
+                ORB_Impl *im = t->impl;
+                while (im != NULL) {
+                    Write(R, 1);
+                    OutType(R, im->intfc);
+                    im = im->next;
+                }
+                Write(R, 0);
+            }
+        } else if (t->form == ORB_Intfc) {
+            /* Flattened member set: name, itable index, signature. */
+            fld = t->meth;
+            while (fld != NULL) {
+                Write(R, ORB_Meth);
+                Files_WriteString(R, fld->name);
+                Files_WriteNum(R, fld->val);
+                OutType(R, fld->type);
+                fld = fld->next;
+            }
+            Write(R, 0);
+            /* Directly included interfaces (conformance looks through). */
+            {
+                ORB_Impl *im = t->impl;
+                while (im != NULL) {
+                    Write(R, 1);
+                    OutType(R, im->intfc);
+                    im = im->next;
+                }
+                Write(R, 0);
+            }
         } else if (t->form == ORB_Proc) {
+            Write(R, t->mthd ? 1 : 0);
             OutType(R, t->base);
             OutPar(R, t->dsc, t->nofpar);
             Write(R, 0);

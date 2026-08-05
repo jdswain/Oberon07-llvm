@@ -35,6 +35,7 @@ server/store/
 
 # Test executables (built from TestHost.Mod by oc -o testhost)
 tests/testhost
+tests/test_host
 tests/oc_files_test.dat
 
 # Legacy per-test executables built before the framework consolidated them
@@ -59,3 +60,23 @@ tests/out.txt
 .claude/
 .vscode/
 .idea/
+
+# Self-hosted compiler build artifacts (self/)
+self/oc-self
+self/*/oc-self
+self/*/oc816
+# generated C bridge + copied-in shared frontend masters
+self/*/ORG_rt.c
+self/*/main.c
+# ...but the 816 driver is hand-written source, not generated:
+!self/s816/main.c
+self/llvm/ORS.Mod
+self/llvm/ORB.Mod
+self/llvm/ORP.Mod
+self/s816/ORS.Mod
+self/s816/ORB.Mod
+self/s816/ORP.Mod
+self/*/*.o
+self/*/*.smb
+self/*/*.ll
+self/*/*.deps

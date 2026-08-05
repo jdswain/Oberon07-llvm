@@ -52,7 +52,12 @@ typedef enum {
        ORS_weak by equality before falling into the regular pointer-type
        branch. Inserting it inside the type-token range would have shifted
        every later token's numeric value and forced ranged-test rewrites. */
-    ORS_weak = 71
+    ORS_weak = 71,
+    /* OO extension keywords (doc/DDR-oberon-oo-extensions.md DDR-007,
+       doc/DDR-008-oberon-interfaces.md). Same append-after-eof strategy as
+       ORS_weak: all are tested by equality only, never by range. */
+    ORS_init = 72, ORS_override = 73, ORS_super = 74,
+    ORS_interface = 75, ORS_implements = 76
 } ORS_Symbol;
 
 // Type definitions
