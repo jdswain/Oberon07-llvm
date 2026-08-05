@@ -1,6 +1,6 @@
 MODULE TestHost;
   IMPORT Errors, Out, Modules, TestRunner, Files, FileDir, Env,
-         Branch, Loops, Cases, Short, Chain,
+         Branch, Loops, Cases, Short, Chars, Chain,
          Sets, Reals, Types, Guards, Guards2,
          Arrs, Recs, RecCopy, Strings, StrPass, Open,
          StackRec, ArrPtrs, Arc, ArcCons, Weak, Tree,
@@ -36,6 +36,7 @@ BEGIN
   RunPlugin("ForTests");
   RunPlugin("CasesTests");
   RunPlugin("ShortTests");
+  RunPlugin("CharsTests");
   RunPlugin("ChainTests");
   RunPlugin("SetsTests");
   RunPlugin("RealsTests");

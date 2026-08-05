@@ -162,6 +162,7 @@ void ORG_Odd(ORG_Item *x);
 void ORG_Floor(ORG_Item *x);
 void ORG_Float(ORG_Item *x);
 void ORG_Ord(ORG_Item *x);
+void ORG_Chr(ORG_Item *x);
 void ORG_Len(ORG_Item *x);
 void ORG_Shift(LONGINT fct, ORG_Item *x, ORG_Item *y);
 void ORG_Bitwise(LONGINT fct, ORG_Item *x, ORG_Item *y);

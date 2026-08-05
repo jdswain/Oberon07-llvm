@@ -2987,6 +2987,17 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     END
   END Ord;
 
+  (* CHR(x): INTEGER -> CHAR. Same materialisation as Ord (identical bytes),
+     but the result is typed CHAR — the low byte is the character; a store to
+     a 1-byte CHAR destination already narrows it. *)
+  PROCEDURE Chr*(VAR x: Item);
+  BEGIN
+    IF (x.mode = ORB.Var) OR (x.mode = ORB.Par) OR (x.mode = RegI) OR (x.mode = Cond) THEN
+      load(x)
+    END;
+    x.type := ORB.charType
+  END Chr;
+
   PROCEDURE Len*(VAR x: Item);
   BEGIN
     IF x.type.len >= 0 THEN

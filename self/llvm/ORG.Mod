@@ -240,6 +240,8 @@ MODULE ORG; (* Interface to the LLVM code generator (DDR C-bridge module).
   BEGIN END Float;
   PROCEDURE Ord*(VAR x: Item);
   BEGIN END Ord;
+  PROCEDURE Chr*(VAR x: Item);
+  BEGIN END Chr;
   PROCEDURE Len*(VAR x: Item);
   BEGIN END Len;
   PROCEDURE Shift*(fct: LONGINT; VAR x, y: Item);

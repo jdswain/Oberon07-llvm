@@ -2416,6 +2416,24 @@ void ORG_Ord(ORG_Item *x) {
     x->orig_type = intType;
     x->backend = v;
 }
+// CHR(x): INTEGER -> CHAR. The mirror of ORD — narrow the value to the i8
+// CHAR width and set the type to CHAR, so an unstored CHR result (e.g. an
+// argument, Out.Write(CHR(b))) is a real i8 rather than a stray i32.
+void ORG_Chr(ORG_Item *x) {
+    LLVMValueRef v = LoadItem(x);
+    LLVMTypeRef vt = LLVMTypeOf(v);
+    if (vt != Ty_i8) {
+        if (LLVMGetTypeKind(vt) == LLVMIntegerTypeKind) {
+            unsigned w = LLVMGetIntTypeWidth(vt);
+            if (w > 8) v = LLVMBuildTrunc(Bld, v, Ty_i8, "chr");
+            else if (w < 8) v = LLVMBuildZExt(Bld, v, Ty_i8, "chr");
+        }
+    }
+    x->mode = Reg;
+    x->type = charType;
+    x->orig_type = charType;
+    x->backend = v;
+}
 void ORG_Len(ORG_Item *x) {
     if (x->type && x->type->form == ORB_Array && x->type->len < 0 && x->backend2) {
         // Open array — backend2 holds the runtime length.
