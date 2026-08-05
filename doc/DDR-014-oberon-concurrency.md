@@ -2,7 +2,7 @@
 
 **Author:** Jason Swain
 **Date:** 2026-07-28
-**Status:** **Accepted** (core decisions). Mechanism: cooperative I/O concurrency, per-backend schedulers (§2.1; preemption at the process boundary only, DDR-018 §5.1). Surface: **library `Spawn`/`Chan`** (§5, decided 2026-08-03); the Active Oberon grammar is the documented non-breaking upgrade path. Residual sub-decisions (non-blocking): channel element typing, cancellation handle, and the stackless-async fallback for wasm-without-JSPI — all with recommendations in §5.
+**Status:** **Accepted; `Spawn`/`Yield` first cut implemented 2026-08-04 (LLVM/POSIX).** Mechanism: cooperative I/O concurrency, per-backend schedulers (§2.1; preemption at the process boundary only, DDR-018 §5.1). Surface: **library `Spawn`/`Chan`** (§5, decided 2026-08-03); the Active Oberon grammar is the documented non-breaking upgrade path. `Tasks` (Spawn/SpawnTask/Yield/Run) + a `ucontext` scheduler now exist and drive `Net.Serve` concurrently — see §8. Still open: **`Chan`** (channel element typing — deferred with narrow-generics), cancellation handle, and the stackless-async fallback for wasm-without-JSPI (§5).
 **Relationship to prior records:** New sibling to DDRs 001–013. It is a *language + runtime* extension (the first since the OO work), so it touches the parent OO record's spirit (minimalism, small runtime, fast single-pass compilation) directly. It consumes DDR-011 (the platform layer that must supply non-blocking I/O and, optionally, threads) and DDR-012 (OS16 already has processes/IPC; a user-level model must map onto them). It is consumed by DDR-015/016/017.
 **External prior art:** **Active Oberon** (Gutknecht & Reali, ETH; the A2/Bluebottle SMP OS) is the authoritative in-family answer — active objects, `{EXCLUSIVE}` monitors, `AWAIT(cond)`. It is preemptive shared-memory (wasm-hostile as-is), but its *surface* is reusable over a cooperative scheduler; see Option 6 (§4).
 
@@ -156,3 +156,22 @@ A `Tasks` module (`Spawn`, `Yield`) plus a `Chan` interface; **no grammar change
 - **DDR-011 §3 →** add I/O-readiness primitives (`poll`/wait-for-ready; browser event-loop hook) and, if Option 5 is ever taken, a thread-spawn primitive (native only).
 - **DDR-010 →** no change; its deadlines are the cancellation substrate.
 - **Parent OO §3 "Closures" →** a `Spawn(P)` that captures state wants closures; this record raises the priority of that open item (see DDR-013 §6).
+
+## 8. As-built — `Tasks`, first cut (LLVM/POSIX)
+
+`runtime/posix/Tasks.Mod` + `Tasks_rt.c`, a cooperative stackful scheduler on one OS thread (Option 1). The surface is deliberately tiny:
+
+```
+  Task = INTERFACE PROCEDURE Run () END;   (* a stateful task: an object *)
+  PROCEDURE Spawn (b: PROCEDURE);          (* a parameterless task *)
+  PROCEDURE SpawnTask (t: Task);           (* an object task — carries state *)
+  PROCEDURE Yield ();                       (* cooperative reschedule *)
+  PROCEDURE Run ();                         (* drive all tasks to completion *)
+```
+
+- **Closures via objects.** Oberon has no closures (DDR-013 §6), so a task that needs captured state (a connection handler needs its `Conn`) is an **object** implementing `Task`; `Spawn(proc)` is just the object adapter over a bare procedure. This is the whole answer to "`Spawn(P)` wants closures" — the object *is* the closure.
+- **Division of labour.** C owns the stacks (`ucontext`), the run queue and the `poll` set; Oberon owns the task objects and dispatch. The fat interface pointer never crosses into C — the scheduler calls one Oberon entry, `Tasks.taskMain(id)`, which invokes `taskList[id].Run()`. This keeps the C side ignorant of the interface ABI.
+- **Blocking-looking I/O yields transparently.** Sockets are non-blocking; on `EAGAIN` the `Net` C bridge calls a runtime seam `oc_iowait(fd, want)`, which the scheduler installs a hook into (via a constructor) to **park the current task** and let others run until `fd` is ready. **With no scheduler running** (`Tasks.Run` not entered, or `Tasks` not linked) `oc_iowait` falls back to a **blocking `poll`** — so the same `Net` code is straight-line-blocking for a simple client and cooperatively-scheduled inside `Tasks.Run`, with no API split and no `async` colouring. This is the DDR-011 §3 I/O-readiness primitive, realised.
+- **`Net.Serve` is now the concurrent accept loop.** It accepts, `SpawnTask`s an echo/handler object per connection, and loops; `Accept` yields while it waits. Verified by `tests/ConcTest.Mod`: a server task and three client tasks on one thread — all three connections are open simultaneously (the clients all reach their blocked `Read` before any echo returns), which a serial server could not produce.
+
+**Deferred from this cut:** `Chan` (blocked on channel element typing — parent §3 narrow-generics; the spawn-per-connection server doesn't need it), a `Cancel`/deadline handle (§5), and the wasm/816 schedulers (this is the LLVM/POSIX one only, per §2.1). The `Net`→`Tasks` import means the ~200-line scheduler links into every `Net` program, but it is dormant (identical blocking behaviour) until `Tasks.Run` is called.

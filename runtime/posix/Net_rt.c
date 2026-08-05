@@ -11,6 +11,7 @@
  * buffer capacity, used only to bound writes back.
  */
 #include <errno.h>
+#include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <signal.h>
@@ -24,6 +25,18 @@
 #ifndef MSG_NOSIGNAL
 #define MSG_NOSIGNAL 0
 #endif
+
+/* Runtime I/O-wait seam (runtime.c): block until fd is ready, cooperatively
+   yielding to other tasks when the Tasks scheduler is linked, else poll().
+   want: bit0 = readable, bit1 = writable. */
+extern int oc_iowait(int fd, int want);
+#define IOWAIT_READ  1
+#define IOWAIT_WRITE 2
+
+static void set_nonblock(int s) {
+    int fl = fcntl(s, F_GETFL, 0);
+    if (fl >= 0) fcntl(s, F_SETFL, fl | O_NONBLOCK);
+}
 
 /* Don't die with SIGPIPE when a peer closes mid-write. */
 static void ignore_sigpipe(void) {
@@ -65,10 +78,20 @@ void Net__DialRaw(const char *host, int hlen, const char *port, int plen,
     rc = getaddrinfo(node, port, &hints, &ai);
     if (rc != 0) { *fd = -1; *res = EINVAL; return; }
     for (p = ai; p != NULL; p = p->ai_next) {
+        int r;
         s = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
         if (s < 0) continue;
         set_nosigpipe(s);
-        if (connect(s, p->ai_addr, p->ai_addrlen) == 0) break;
+        set_nonblock(s);
+        r = connect(s, p->ai_addr, p->ai_addrlen);
+        if (r == 0) break;                       /* immediate (loopback) */
+        if (errno == EINPROGRESS) {              /* wait writable, check SO_ERROR */
+            int soerr = 0;
+            socklen_t sl = sizeof soerr;
+            oc_iowait(s, IOWAIT_WRITE);
+            if (getsockopt(s, SOL_SOCKET, SO_ERROR, &soerr, &sl) == 0 && soerr == 0) break;
+            errno = soerr ? soerr : ECONNREFUSED;
+        }
         close(s); s = -1;
     }
     freeaddrinfo(ai);
@@ -99,7 +122,7 @@ void Net__ListenRaw(const char *host, int hlen, const char *port, int plen,
     }
     freeaddrinfo(ai);
     if (s < 0) { *fd = -1; *res = errno ? errno : EADDRINUSE; }
-    else { *fd = s; *res = 0; }
+    else { set_nonblock(s); *fd = s; *res = 0; }
 }
 
 void Net__AcceptRaw(int lfd, int *fd, int *res, char *peer, int peer_len) {
@@ -107,10 +130,15 @@ void Net__AcceptRaw(int lfd, int *fd, int *res, char *peer, int peer_len) {
     socklen_t sl = sizeof ss;
     int s;
     if (peer_len > 0) peer[0] = 0;
-    do { s = accept(lfd, (struct sockaddr *)&ss, &sl); }
-    while (s < 0 && errno == EINTR);
-    if (s < 0) { *fd = -1; *res = errno ? errno : EIO; return; }
+    for (;;) {
+        s = accept(lfd, (struct sockaddr *)&ss, &sl);
+        if (s >= 0) break;
+        if (errno == EINTR) continue;
+        if (errno == EAGAIN || errno == EWOULDBLOCK) { oc_iowait(lfd, IOWAIT_READ); continue; }
+        *fd = -1; *res = errno ? errno : EIO; return;
+    }
     set_nosigpipe(s);
+    set_nonblock(s);
     *fd = s; *res = 0;
     fmt_addr((struct sockaddr *)&ss, sl, peer, peer_len);
 }
@@ -131,15 +159,26 @@ static int clamp_window(int buf_len, int start, int len, int *off) {
 int Net__ReadRaw(int fd, uint8_t *buf, int buf_len, int start, int len) {
     ssize_t r;
     int off, m = clamp_window(buf_len, start, len, &off);
-    do { r = recv(fd, buf + off, (size_t)m, 0); } while (r < 0 && errno == EINTR);
+    for (;;) {
+        r = recv(fd, buf + off, (size_t)m, 0);
+        if (r >= 0) break;
+        if (errno == EINTR) continue;
+        if (errno == EAGAIN || errno == EWOULDBLOCK) { oc_iowait(fd, IOWAIT_READ); continue; }
+        break;
+    }
     return (int)r;
 }
 
 int Net__WriteRaw(int fd, uint8_t *buf, int buf_len, int start, int len) {
     ssize_t w;
     int off, m = clamp_window(buf_len, start, len, &off);
-    do { w = send(fd, buf + off, (size_t)m, MSG_NOSIGNAL); }
-    while (w < 0 && errno == EINTR);
+    for (;;) {
+        w = send(fd, buf + off, (size_t)m, MSG_NOSIGNAL);
+        if (w >= 0) break;
+        if (errno == EINTR) continue;
+        if (errno == EAGAIN || errno == EWOULDBLOCK) { oc_iowait(fd, IOWAIT_WRITE); continue; }
+        break;
+    }
     return (int)w;
 }
 

@@ -13,7 +13,7 @@ MODULE Net;
    "ws" for wasm with no surface change (DDR-015 §3.1-A). TLS, datagrams,
    and deadlines are designed-in elsewhere but not in this first cut. *)
 
-  IMPORT Streams, Errors;
+  IMPORT Streams, Errors, Tasks;
 
   TYPE
     (* --- portable interfaces (DDR-010 / DDR-015) --- *)
@@ -55,6 +55,14 @@ MODULE Net;
     TCPListenerDesc = RECORD IMPLEMENTS Listener
       fd: INTEGER;
       addr: NetAddr
+    END;
+
+    (* a spawned per-connection handler: the object carries the (h, c) state a
+       bare Tasks.Body procedure could not (no closures) *)
+    connJob = POINTER TO connJobDesc;
+    connJobDesc = RECORD IMPLEMENTS Tasks.Task
+      h: Handler;
+      c: Conn
     END;
 
   (* ----- raw C bridges (Net_rt.c). Exported so the empty bodies get weak
@@ -234,16 +242,22 @@ MODULE Net;
     RETURN l
   END Listen;
 
-  (* Serial accept loop: each connection is handled to completion before the
-     next is accepted. When the DDR-014 Tasks library lands, the body becomes
-     Spawn(h.Serve(c)) per connection (DDR-015 §3.3) with no surface change.
-     Returns when Accept fails — e.g. after the listener is closed. *)
+  PROCEDURE (j: connJob) Run ();
+  BEGIN j.h.Serve(j.c)
+  END Run;
+
+  (* Concurrent accept loop (DDR-014 / DDR-015 §3.3): each accepted connection
+     is handed to a fresh task, so the handler runs while the loop goes back to
+     accepting. Accept itself yields cooperatively while it waits, so a single
+     thread serves many connections at once. Runs inside Tasks.Run; returns
+     when Accept fails, e.g. after the listener is closed. *)
   PROCEDURE Serve* (l: Listener; h: Handler; VAR err: Errors.Error);
-    VAR c: Conn;
+    VAR c: Conn; j: connJob;
   BEGIN
     c := l.Accept(err);
     WHILE err = NIL DO
-      h.Serve(c);
+      NEW(j); j.h := h; j.c := c;
+      Tasks.SpawnTask(j);
       c := l.Accept(err)
     END
   END Serve;
