@@ -10,9 +10,16 @@ MODULE OCG; (* 65C816 instruction encoder.
    stack-relative expansion, and JSR/JSL relocation recording. *)
 
   CONST
-    maxCode* = 48000;
+    (* A module's code loads into one 64K bank (code starts at bank offset 0).
+       Cap it just under the bank so the loader's per-module header/tables have
+       room — 65024 = 65536 - 512. Modules that overflow this abort cleanly
+       ("program too large"); the two that do today, ORG (~117K) and ORP
+       (~71K), are too big for one bank and need splitting, not a larger cap.
+       maxReloc is sized for a near-full-bank module (reloc count tracks code
+       size at roughly code/40; the largest module that fits, ORB, uses 374). *)
+    maxCode* = 65024;
     CodeOrg = 0;             (* code starts at $0000 *)
-    maxReloc* = 1024;
+    maxReloc* = 2048;
 
     (* addressing modes — same order as the C AddrMode enum *)
     mAbs* = 0; mAcc* = 1; mAbsX* = 2; mAbsY* = 3; mAbsL* = 4;
