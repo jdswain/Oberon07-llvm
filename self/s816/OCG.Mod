@@ -51,12 +51,31 @@ MODULE OCG; (* 65C816 instruction encoder.
     dpage, pbreg: LONGINT;
     reloc: ARRAY maxReloc OF LONGINT;
     relocC: INTEGER;
+    fault: BOOLEAN;            (* a fixed buffer (code/reloc) overflowed *)
 
   (* --- byte emission --- *)
 
+  (* Bounds-checked so a module larger than the fixed code buffer sets the
+     fault flag instead of writing past `code` (which segfaulted the
+     self-compile of the big ORG module). pc stays monotonic so branch
+     offsets remain consistent; the fault makes Close refuse to emit. *)
   PROCEDURE o(b: LONGINT);
-  BEGIN code[pc - CodeOrg] := b MOD 100H; pc := pc + 1
+  BEGIN
+    IF pc - CodeOrg < maxCode THEN code[pc - CodeOrg] := b MOD 100H
+    ELSE fault := TRUE
+    END;
+    pc := pc + 1
   END o;
+
+  (* Bounds-checked relocation append — the reloc table is fixed-size, and a
+     module with more module/import calls than fit was the actual segfault
+     (an out-of-bounds LONGINT store in gen). Overflow sets fault. *)
+  PROCEDURE addReloc(p: LONGINT);
+  BEGIN
+    IF relocC < maxReloc THEN reloc[relocC] := p; relocC := relocC + 1
+    ELSE fault := TRUE
+    END
+  END addReloc;
 
   PROCEDURE ob(op, v: LONGINT);      (* op + low byte *)
   BEGIN o(op); o(v)
@@ -342,14 +361,14 @@ MODULE OCG; (* 65C816 instruction encoder.
         END
     | JSL:
         IF (mode = mDP) OR (mode = mAbs) OR (mode = mAbsL) THEN
-          reloc[relocC] := pc; relocC := relocC + 1; ol(22H, v1)
+          addReloc(pc); ol(22H, v1)
         END
     | JSR:
         IF (mode = mDP) OR (mode = mAbs) THEN
-          reloc[relocC] := pc; relocC := relocC + 1; ow(20H, v1)
+          addReloc(pc); ow(20H, v1)
         ELSIF mode = mAbsIndX THEN ow(0FCH, v1)
         ELSIF mode = mAbsL THEN
-          reloc[relocC] := pc; relocC := relocC + 1; ol(22H, v1)
+          addReloc(pc); ol(22H, v1)
         END
     | LDA:
         IF mode = mImm THEN om(0A9H, v1, longa)
@@ -550,8 +569,20 @@ MODULE OCG; (* 65C816 instruction encoder.
   (* --- accessors for ORG --- *)
   PROCEDURE Here*(): LONGINT;         BEGIN RETURN pc END Here;
   PROCEDURE SetPc*(p: LONGINT);       BEGIN pc := p END SetPc;
-  PROCEDURE Get*(at: LONGINT): INTEGER; BEGIN RETURN code[at] END Get;
-  PROCEDURE Patch*(at, b: LONGINT);   BEGIN code[at] := b MOD 100H END Patch;
+  (* Bounds-checked: after a code-buffer overflow the fixup chains embedded
+     in `code` are truncated, so a chain walk could read/patch out of range.
+     Get returns 0 (a chain terminator, so walks end) and Patch is a no-op;
+     both set fault so Close refuses to emit. *)
+  PROCEDURE Get*(at: LONGINT): INTEGER;
+    VAR r: INTEGER;
+  BEGIN
+    IF (at >= 0) & (at < maxCode) THEN r := code[at] ELSE fault := TRUE; r := 0 END;
+    RETURN r
+  END Get;
+  PROCEDURE Patch*(at, b: LONGINT);
+  BEGIN
+    IF (at >= 0) & (at < maxCode) THEN code[at] := b MOD 100H ELSE fault := TRUE END
+  END Patch;
   PROCEDURE LongA*(): BOOLEAN;        BEGIN RETURN longa END LongA;
   PROCEDURE SetLongA*(b: BOOLEAN);    BEGIN longa := b END SetLongA;
   PROCEDURE LongI*(): BOOLEAN;        BEGIN RETURN longi END LongI;
@@ -561,16 +592,22 @@ MODULE OCG; (* 65C816 instruction encoder.
   PROCEDURE RelCount*(): INTEGER;     BEGIN RETURN relocC END RelCount;
   PROCEDURE Rel*(i: INTEGER): LONGINT; BEGIN RETURN reloc[i] END Rel;
   PROCEDURE AddRel*(p: LONGINT);
-  BEGIN reloc[relocC] := p; relocC := relocC + 1
+  BEGIN addReloc(p)
   END AddRel;
+
+  (* TRUE once a fixed buffer (code or reloc) overflowed — the module is too
+     large. ORG.Close checks this and refuses to emit a truncated .816. *)
+  PROCEDURE Faulted*(): BOOLEAN;
+  BEGIN RETURN fault
+  END Faulted;
 
   PROCEDURE Init*;
   BEGIN
     pc := CodeOrg; longa := TRUE; longi := TRUE;
-    dpage := 0; pbreg := 0; relocC := 0
+    dpage := 0; pbreg := 0; relocC := 0; fault := FALSE
   END Init;
 
 BEGIN
   pc := CodeOrg; longa := TRUE; longi := TRUE;
-  dpage := 0; pbreg := 0; relocC := 0
+  dpage := 0; pbreg := 0; relocC := 0; fault := FALSE
 END OCG.
