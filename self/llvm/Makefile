@@ -21,6 +21,12 @@ LLVM_LIBS    := $(shell $(LLVM_CONFIG) --libs core bitwriter analysis) \
                 $(shell $(LLVM_CONFIG) --system-libs)
 
 RT := ../../runtime/posix
+# Files/Out/Errors are the POSIX runtime modules the frontend imports (ORS
+# imports Files + Out) and oc-self links against. Their .smb/.o are gitignored
+# artifacts — absent on a clean checkout or after an unrelated `rm *.smb` in
+# runtime/posix — so build them here before the frontend; otherwise the ORS
+# compile fails with a confusing "import not available" cascade.
+RT_SMB := $(RT)/Errors.smb $(RT)/Out.smb $(RT)/Files.smb
 
 CC     := clang
 CFLAGS := -std=c11 -Wall -Wno-unused-parameter -Wno-unused-function -g $(LLVM_CFLAGS)
@@ -38,9 +44,20 @@ ORB.Mod: ../ORB.Mod
 ORP.Mod: ../ORP.Mod
 	cp ../ORP.Mod .
 
+# POSIX runtime modules the frontend imports and the link needs. `oc -s`
+# emits <mod>.smb + <mod>.o next to the source. Errors is a leaf; Files
+# imports Errors.
+$(RT)/Errors.smb: $(RT)/Errors.Mod
+	$(OC0) -s $(RT)/Errors.Mod
+$(RT)/Out.smb: $(RT)/Out.Mod
+	$(OC0) -s $(RT)/Out.Mod
+$(RT)/Files.smb: $(RT)/Files.Mod $(RT)/Errors.smb
+	$(OC0) -s $(RT)/Files.Mod
+
 # Stage-0 compilation. Modules depend on each other's .smb files, so the
-# order is fixed: ORS -> ORB -> ORG -> ORP.
-ORS.o: ORS.Mod
+# order is fixed: ORS -> ORB -> ORG -> ORP. ORS imports Files + Out, so the
+# runtime .smb must exist first.
+ORS.o: ORS.Mod $(RT_SMB)
 	$(OC0) -s ORS.Mod
 ORB.o: ORB.Mod ORS.o
 	$(OC0) -s ORB.Mod
@@ -58,7 +75,7 @@ ORG_rt.o: ORG_rt.c
 main.o: main.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-oc-self: $(OBJS)
+oc-self: $(OBJS) $(RT_SMB)
 	$(CC) $(LLVM_LDFLAGS) -o $@ $(OBJS) \
 	    $(RT)/Files.o $(RT)/Out.o $(RT)/Errors.o \
 	    $(RT)/Files_rt.c $(RT)/Out_rt.c $(RT)/runtime.c \
