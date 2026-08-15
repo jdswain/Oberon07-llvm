@@ -359,7 +359,10 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   PROCEDURE FixLink*(L: LONGINT);
     VAR L1, ci: LONGINT;
   BEGIN
-    WHILE L # 0 DO
+    (* ~OCG.Faulted() backstops a chain corrupted by a code-buffer overflow
+       whose garbage links happen to stay in range (Get already terminates
+       out-of-range walks by returning 0). *)
+    WHILE (L # 0) & ~OCG.Faulted() DO
       ci := L - CodeOrg;
       L1 := OCG.Get(ci) + OCG.Get(ci + 1) * 100H;
       fix(L, OCG.Here());
@@ -3012,7 +3015,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   END Len;
 
   PROCEDURE Shift*(fct: LONGINT; VAR x, y: Item);
-    VAR op, i: LONGINT;
+    VAR op, i, L: LONGINT;
   BEGIN
     load(x);
     IF fct = 0 THEN op := OCG.ASL
@@ -3027,7 +3030,20 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         WHILE i < y.a DO OCG.Gen(op, OCG.mImpl, 0, 0); i := i + 1 END;
         OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r), 0)
       END
-    ELSE ORS.Mark("non-const shift not implemented")
+    ELSE
+      (* Runtime shift count: the 65C816 has no barrel shifter, so shift the
+         value (in its DP register) one place at a time, counting the count
+         register down. Value and count both stay in DP; nothing else is
+         clobbered. Loop body is 6 bytes (op:2 + DEC:2 + BNE:2), so the
+         count=0 guard branches past it to Here()+2(BEQ)+6. *)
+      load(y);
+      OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(y.r), 0);      (* A := count (sets Z) *)
+      OCG.Gen(OCG.BEQ, OCG.mPCR, OCG.Here() + 8, 0);   (* count = 0 -> skip *)
+      L := OCG.Here();
+      OCG.Gen(op, OCG.mDP, RegAddr(x.r), 0);           (* value shifted once *)
+      OCG.Gen(OCG.DEC, OCG.mDP, RegAddr(y.r), 0);      (* count-- (sets Z) *)
+      OCG.Gen(OCG.BNE, OCG.mPCR, L, 0);                (* repeat while # 0 *)
+      RH := RH - 1                                     (* free the count reg *)
     END
   END Shift;
 
@@ -3958,7 +3974,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     END
   END fixupFPCalls;
 
-  PROCEDURE Close*(modid: ARRAY OF CHAR; key: LONGINT; nofent: LONGINT);
+  PROCEDURE writeModule(modid: ARRAY OF CHAR; key: LONGINT; nofent: LONGINT);
     VAR obj: ORB.Object; i, comsize, nofimps, nofptrs, size: LONGINT;
       name: ARRAY 256 OF CHAR; F: Files.File; R: Files.Rider;
   BEGIN
@@ -4120,6 +4136,19 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     Write4(R, entry);
     Files.WriteByte(R, ORD("O"));
     Files.Register(F)
+  END writeModule;
+
+  (* Emit the .816 module — unless a fixed backend buffer overflowed while
+     generating code, in which case the code/reloc tables are truncated and
+     the module would be silently wrong. Mark instead so the compile fails
+     cleanly (this is the clean-abort for an over-large module; the raw
+     overflow used to run past the reloc array and segfault). *)
+  PROCEDURE Close*(modid: ARRAY OF CHAR; key: LONGINT; nofent: LONGINT);
+  BEGIN
+    IF OCG.Faulted() THEN
+      ORS.Mark("program too large: code or relocation table overflow")
+    ELSE writeModule(modid, key, nofent)
+    END
   END Close;
 
   (* --- SYSTEM pseudo-module registration (816 set) --- *)
