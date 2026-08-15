@@ -1982,9 +1982,11 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   END Store;
 
   PROCEDURE StoreStruct*(VAR x, y: Item);
-    VAR s, wordCount, dstReg, srcReg, loopTop: LONGINT; valid: BOOLEAN;
+    VAR s, wordCount, dstReg, srcReg, loopTop, elemSz, k, i, t: LONGINT;
+        valid, openSrc: BOOLEAN;
   BEGIN
     IF y.type.size # 0 THEN
+      openSrc := FALSE; k := 0;
       loadAdr(x); loadAdr(y);
       dstReg := RegAddr(x.r); srcReg := RegAddr(y.r);
       valid := TRUE; s := 0;
@@ -1993,15 +1995,46 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
           IF x.type.size = y.type.size THEN s := y.type.size
           ELSE ORS.Mark("different length/size, not implemented"); valid := FALSE
           END
-        ELSE ORS.Mark("open array assignment not implemented"); valid := FALSE
+        ELSE
+          (* Open-array source: the byte count is LEN(y) * elemSize, only
+             known at runtime. elemSize must be a power of two so the
+             element->byte scale is a shift (covers CHAR/BYTE/INTEGER/ptr/
+             REAL and arrays of them). *)
+          elemSz := x.type.base.size; t := elemSz;
+          WHILE (t > 1) & (t MOD 2 = 0) DO t := t DIV 2; k := k + 1 END;
+          IF t # 1 THEN
+            ORS.Mark("open array of non-power-of-2 element not implemented");
+            valid := FALSE
+          ELSE openSrc := TRUE
+          END
         END
       ELSIF x.type.form = ORB.Record THEN s := x.type.size
       ELSE ORS.Mark("inadmissible assignment"); valid := FALSE
       END;
-      IF valid THEN
+      IF valid & ~openSrc THEN
         wordCount := (s + 1) DIV 2; Set16(TRUE, TRUE);
         OCG.Gen(OCG.LDY, OCG.mImm, 0, 0);
         OCG.Gen(OCG.LDX, OCG.mImm, wordCount, 0);
+        loopTop := OCG.Here();
+        OCG.Gen(OCG.LDA, OCG.mDPIndY, srcReg, 0);
+        OCG.Gen(OCG.STA, OCG.mDPIndY, dstReg, 0);
+        OCG.Gen(OCG.INY, OCG.mImpl, 0, 0);
+        OCG.Gen(OCG.INY, OCG.mImpl, 0, 0);
+        OCG.Gen(OCG.DEX, OCG.mImpl, 0, 0);
+        OCG.Gen(OCG.BNE, OCG.mPCR, loopTop, 0)
+      ELSIF openSrc THEN
+        (* wordCount := (LEN(y) * elemSize + 1) DIV 2, computed in A->X.
+           X (the word counter) and Y (the byte index) are 16-bit. LEN(y) is
+           at the param's length slot, y.a + 4 + frame (same as Len). *)
+        Set16(TRUE, TRUE);
+        OCG.Gen(OCG.LDA, OCG.mSR, y.a + 4 + frame, 0);   (* A := element count *)
+        i := 0;
+        WHILE i < k DO OCG.Gen(OCG.ASL, OCG.mImpl, 0, 0); i := i + 1 END; (* *elemSize *)
+        OCG.Gen(OCG.INC, OCG.mImpl, 0, 0);               (* +1 ... *)
+        OCG.Gen(OCG.LSR, OCG.mImpl, 0, 0);               (* ... DIV 2 = wordCount *)
+        OCG.Gen(OCG.TAX, OCG.mImpl, 0, 0);               (* X := wordCount (sets Z) *)
+        OCG.Gen(OCG.BEQ, OCG.mPCR, OCG.Here() + 14, 0);  (* empty -> skip loop *)
+        OCG.Gen(OCG.LDY, OCG.mImm, 0, 0);
         loopTop := OCG.Here();
         OCG.Gen(OCG.LDA, OCG.mDPIndY, srcReg, 0);
         OCG.Gen(OCG.STA, OCG.mDPIndY, dstReg, 0);
