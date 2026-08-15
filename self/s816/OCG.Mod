@@ -16,7 +16,14 @@ MODULE OCG; (* 65C816 instruction encoder.
        ("program too large"); the two that do today, ORG (~117K) and ORP
        (~71K), are too big for one bank and need splitting, not a larger cap.
        maxReloc is sized for a near-full-bank module (reloc count tracks code
-       size at roughly code/40; the largest module that fits, ORB, uses 374). *)
+       size at roughly code/40; the largest module that fits, ORB, uses 374).
+
+       HARD LIMIT — maxCode must never exceed 65536. Branch operands and the
+       forward-branch fixup chain links (ofix/ofixl store v MOD 10000H) are
+       16-bit, so a code offset past 64K truncates: FixLink then walks garbage
+       links and the compile crawls. That is a symptom of "too big for a bank",
+       not a perf bug — at any legal cap the overflow guard fires first and the
+       module aborts instantly. *)
     maxCode* = 65024;
     CodeOrg = 0;             (* code starts at $0000 *)
     maxReloc* = 2048;
