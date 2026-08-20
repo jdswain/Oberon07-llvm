@@ -457,12 +457,12 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
             perAddr := OCG.Here();
             perOp := x.a - perAddr - 3;
             OCG.Gen(OCG.PER, OCG.mImm, Lo16(perOp), 0);
-            OCG.Gen(OCG.PLA, OCG.mImpl, 0, 0);
+            OCG.Pla;
             OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH), 0);
             OCG.Gen(OCG.STZ, OCG.mDP, RegAddr(RH + 1), 0);
-            OCG.Gen(OCG.PHK, OCG.mImpl, 0, 0);
+            OCG.Phk;
             Set8(TRUE, FALSE);
-            OCG.Gen(OCG.PLA, OCG.mImpl, 0, 0);
+            OCG.Pla;
             OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 1), 0);
             Set16(TRUE, FALSE);
             x.r := RH; incR; incR
@@ -472,12 +472,12 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
             encoded := mno * 100H + (exno MOD 100H);
             OCG.AddRel(OCG.Here());
             OCG.Gen(OCG.PER, OCG.mImm, encoded, 0);
-            OCG.Gen(OCG.PLA, OCG.mImpl, 0, 0);
+            OCG.Pla;
             OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH), 0);
             OCG.Gen(OCG.STZ, OCG.mDP, RegAddr(RH + 1), 0);
-            OCG.Gen(OCG.PHK, OCG.mImpl, 0, 0);
+            OCG.Phk;
             Set8(TRUE, FALSE);
-            OCG.Gen(OCG.PLA, OCG.mImpl, 0, 0);
+            OCG.Pla;
             OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 1), 0);
             Set16(TRUE, FALSE);
             x.r := RH; incR; incR
@@ -567,17 +567,17 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
           IF x.b # 0 THEN
             OCG.Gen(OCG.LDY, OCG.mImm, x.b + 2, 0);
             OCG.Gen(OCG.LDA, OCG.mDPIndLY, RegAddr(RH), 0);
-            OCG.Gen(OCG.PHA, OCG.mImpl, 0, 0);
+            OCG.Pha;
             OCG.Gen(OCG.LDY, OCG.mImm, x.b, 0);
             OCG.Gen(OCG.LDA, OCG.mDPIndLY, RegAddr(RH), 0)
           ELSE
             OCG.Gen(OCG.LDY, OCG.mImm, 2, 0);
             OCG.Gen(OCG.LDA, OCG.mDPIndLY, RegAddr(RH), 0);
-            OCG.Gen(OCG.PHA, OCG.mImpl, 0, 0);
+            OCG.Pha;
             OCG.Gen(OCG.LDA, OCG.mDPIndL, RegAddr(RH), 0)
           END;
           OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH), 0);
-          OCG.Gen(OCG.PLA, OCG.mImpl, 0, 0);
+          OCG.Pla;
           OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 1), 0);
           x.r := RH; incR; incR
         ELSIF x.type.size = 1 THEN
@@ -609,7 +609,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
           Set16(TRUE, TRUE);
           OCG.Gen(OCG.LDY, OCG.mImm, x.a + 2, 0);
           OCG.Gen(OCG.LDA, OCG.mDPIndLY, RegAddr(x.r), 0);
-          OCG.Gen(OCG.PHA, OCG.mImpl, 0, 0);
+          OCG.Pha;
           IF x.a = 0 THEN
             OCG.Gen(OCG.LDA, OCG.mDPIndL, RegAddr(x.r), 0)
           ELSE
@@ -617,7 +617,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
             OCG.Gen(OCG.LDA, OCG.mDPIndLY, RegAddr(x.r), 0)
           END;
           OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r), 0);
-          OCG.Gen(OCG.PLA, OCG.mImpl, 0, 0);
+          OCG.Pla;
           OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r + 1), 0)
         ELSIF x.type.size = 1 THEN
           Set8(TRUE, FALSE);
@@ -663,8 +663,8 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     IF x.mode = ORB.Var THEN
       IF x.r > 0 THEN
         Set16(TRUE, TRUE);
-        OCG.Gen(OCG.TSC, OCG.mImpl, 0, 0);
-        OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+        OCG.Tsc;
+        OCG.Clc;
         OCG.Gen(OCG.ADC, OCG.mImm, x.a + frame, 0);
         OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH), 0);
         OCG.Gen(OCG.STZ, OCG.mDP, RegAddr(RH + 1), 0)
@@ -672,7 +672,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         sb := GetSB(x.r);
         Set16(TRUE, TRUE);
         OCG.Gen(OCG.LDA, OCG.mImm, x.a, 0);
-        OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+        OCG.Clc;
         OCG.Gen(OCG.ADC, OCG.mDP, sb, 0);
         OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH), 0);
         IF x.r >= 0 THEN
@@ -691,7 +691,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 1), 0);
       IF x.b # 0 THEN
         OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(RH), 0);
-        OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+        OCG.Clc;
         OCG.Gen(OCG.ADC, OCG.mImm, x.b, 0);
         OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH), 0)
       END;
@@ -700,7 +700,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       IF x.a # 0 THEN
         Set16(TRUE, TRUE);
         OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(x.r), 0);
-        OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+        OCG.Clc;
         OCG.Gen(OCG.ADC, OCG.mImm, x.a, 0);
         OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r), 0)
       END
@@ -709,7 +709,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
          section at var-relative offset x.a; its address is SB+varsize+x.a *)
       Set16(TRUE, TRUE);
       OCG.Gen(OCG.LDA, OCG.mImm, varsize + x.a, 0);
-      OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+      OCG.Clc;
       OCG.Gen(OCG.ADC, OCG.mDP, SB_DP, 0);
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH), 0);
       OCG.Gen(OCG.LDA, OCG.mDP, BANK_DP, 0);
@@ -746,7 +746,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   BEGIN
     Set16(TRUE, TRUE);
     OCG.Gen(OCG.LDA, OCG.mDP, SB_DP, 0);
-    OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+    OCG.Clc;
     OCG.Gen(OCG.ADC, OCG.mImm, varsize + x.a, 0);
     OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH), 0);
     x.mode := Reg; x.r := RH; incR
@@ -910,7 +910,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
           WHILE remaining > 0 DO
             OCG.Gen(OCG.ASL, OCG.mDP, idxReg, 0);
             IF ODD(remaining) THEN
-              OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+              OCG.Clc;
               OCG.Gen(OCG.ADC, OCG.mDP, idxReg, 0)
             END;
             remaining := remaining DIV 2
@@ -921,8 +921,8 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       IF x.mode = ORB.Var THEN
         IF x.r > 0 THEN
           Set16(TRUE, TRUE);
-          OCG.Gen(OCG.TSC, OCG.mImpl, 0, 0);
-          OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+          OCG.Tsc;
+          OCG.Clc;
           OCG.Gen(OCG.ADC, OCG.mImm, x.a + frame, 0);
           OCG.Gen(OCG.ADC, OCG.mDP, RegAddr(y.r), 0);
           OCG.Gen(OCG.STA, OCG.mDP, RegAddr(y.r), 0)
@@ -930,7 +930,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
           sb := GetSB(x.r);
           Set16(TRUE, TRUE);
           OCG.Gen(OCG.LDA, OCG.mDP, sb, 0);
-          OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+          OCG.Clc;
           OCG.Gen(OCG.ADC, OCG.mImm, x.a, 0);
           OCG.Gen(OCG.ADC, OCG.mDP, RegAddr(y.r), 0);
           OCG.Gen(OCG.STA, OCG.mDP, RegAddr(y.r), 0)
@@ -940,7 +940,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       ELSIF x.mode = ORB.Par THEN
         Set16(TRUE, TRUE);
         OCG.Gen(OCG.LDA, OCG.mSR, x.a + frame, 0);
-        OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+        OCG.Clc;
         OCG.Gen(OCG.ADC, OCG.mDP, RegAddr(y.r), 0);
         OCG.Gen(OCG.STA, OCG.mDP, RegAddr(y.r), 0);
         OCG.Gen(OCG.LDA, OCG.mSR, x.a + 2 + frame, 0);
@@ -950,7 +950,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       ELSIF x.mode = ORB.Const THEN
         Set16(TRUE, TRUE);
         OCG.Gen(OCG.LDA, OCG.mDP, SB_DP, 0);
-        OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+        OCG.Clc;
         OCG.Gen(OCG.ADC, OCG.mImm, varsize + x.a, 0);
         OCG.Gen(OCG.ADC, OCG.mDP, RegAddr(y.r), 0);
         OCG.Gen(OCG.STA, OCG.mDP, RegAddr(y.r), 0);
@@ -959,7 +959,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       ELSIF x.mode = RegI THEN
         Set16(TRUE, TRUE);
         OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(x.r), 0);
-        OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+        OCG.Clc;
         OCG.Gen(OCG.ADC, OCG.mDP, RegAddr(y.r), 0);
         OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r), 0);
         RH := RH - 1
@@ -999,7 +999,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 1), 0);
       OCG.Gen(OCG.LDY, OCG.mImm, x.b + 2, 0);
       OCG.Gen(OCG.LDA, OCG.mDPIndLY, RegAddr(RH), 0);
-      OCG.Gen(OCG.PHA, OCG.mImpl, 0, 0);
+      OCG.Pha;
       IF x.b = 0 THEN
         OCG.Gen(OCG.LDA, OCG.mDPIndL, RegAddr(RH), 0)
       ELSE
@@ -1007,7 +1007,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         OCG.Gen(OCG.LDA, OCG.mDPIndLY, RegAddr(RH), 0)
       END;
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH), 0);
-      OCG.Gen(OCG.PLA, OCG.mImpl, 0, 0);
+      OCG.Pla;
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 1), 0);
       IF check THEN
         OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(RH), 0);
@@ -1018,7 +1018,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     ELSIF x.mode = RegI THEN
       OCG.Gen(OCG.LDY, OCG.mImm, x.a + 2, 0);
       OCG.Gen(OCG.LDA, OCG.mDPIndLY, RegAddr(x.r), 0);
-      OCG.Gen(OCG.PHA, OCG.mImpl, 0, 0);
+      OCG.Pha;
       IF x.a = 0 THEN
         OCG.Gen(OCG.LDA, OCG.mDPIndL, RegAddr(x.r), 0)
       ELSE
@@ -1026,7 +1026,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         OCG.Gen(OCG.LDA, OCG.mDPIndLY, RegAddr(x.r), 0)
       END;
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r), 0);
-      OCG.Gen(OCG.PLA, OCG.mImpl, 0, 0);
+      OCG.Pla;
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r + 1), 0);
       IF check THEN
         OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(x.r), 0);
@@ -1240,7 +1240,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       OCG.Gen(OCG.LDA, OCG.mSR, x.a + 6 + frame, 0);
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH - 1), 0);
       offset := 2 + (T.nofpar - 1) * 4;
-      OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+      OCG.Clc;
       OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(RH - 2), 0);
       OCG.Gen(OCG.ADC, OCG.mImm, offset, 0);
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH - 2), 0);
@@ -1248,15 +1248,15 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       OCG.Gen(OCG.ADC, OCG.mImm, 0, 0);
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH - 1), 0);
       OCG.Gen(OCG.LDA, OCG.mDPIndL, RegAddr(RH - 2), 0);
-      OCG.Gen(OCG.PHA, OCG.mImpl, 0, 0);
+      OCG.Pha;
       OCG.Gen(OCG.LDY, OCG.mImm, 2, 0);
       OCG.Gen(OCG.LDA, OCG.mDPIndLY, RegAddr(RH - 2), 0);
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH - 1), 0);
-      OCG.Gen(OCG.PLA, OCG.mImpl, 0, 0);
+      OCG.Pla;
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH - 2), 0);
       sb := GetSB(-T.mno);
       OCG.Gen(OCG.LDA, OCG.mDP, sb, 0);
-      OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+      OCG.Clc;
       emitTDLen(T);
       OCG.Gen(OCG.EOR, OCG.mDP, RegAddr(RH - 2), 0);
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH - 2), 0);
@@ -1275,7 +1275,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       OCG.Gen(OCG.ORA, OCG.mDP, RegAddr(x.r + 1), 0);
       nilSkip := emitFwdBranch(OCG.BEQ);
       incR; incR;
-      OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+      OCG.Sec;
       OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(x.r), 0);
       OCG.Gen(OCG.SBC, OCG.mImm, 4, 0);
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH - 2), 0);
@@ -1283,14 +1283,14 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       OCG.Gen(OCG.SBC, OCG.mImm, 0, 0);
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH - 1), 0);
       OCG.Gen(OCG.LDA, OCG.mDPIndL, RegAddr(RH - 2), 0);
-      OCG.Gen(OCG.PHA, OCG.mImpl, 0, 0);
+      OCG.Pha;
       OCG.Gen(OCG.LDY, OCG.mImm, 2, 0);
       OCG.Gen(OCG.LDA, OCG.mDPIndLY, RegAddr(RH - 2), 0);
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH - 1), 0);
-      OCG.Gen(OCG.PLA, OCG.mImpl, 0, 0);
+      OCG.Pla;
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH - 2), 0);
       offset := 2 + (T.nofpar - 1) * 4;
-      OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+      OCG.Clc;
       OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(RH - 2), 0);
       OCG.Gen(OCG.ADC, OCG.mImm, offset, 0);
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH - 2), 0);
@@ -1298,15 +1298,15 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       OCG.Gen(OCG.ADC, OCG.mImm, 0, 0);
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH - 1), 0);
       OCG.Gen(OCG.LDA, OCG.mDPIndL, RegAddr(RH - 2), 0);
-      OCG.Gen(OCG.PHA, OCG.mImpl, 0, 0);
+      OCG.Pha;
       OCG.Gen(OCG.LDY, OCG.mImm, 2, 0);
       OCG.Gen(OCG.LDA, OCG.mDPIndLY, RegAddr(RH - 2), 0);
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH - 1), 0);
-      OCG.Gen(OCG.PLA, OCG.mImpl, 0, 0);
+      OCG.Pla;
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH - 2), 0);
       sb := GetSB(-T.mno);
       OCG.Gen(OCG.LDA, OCG.mDP, sb, 0);
-      OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+      OCG.Clc;
       emitTDLen(T);
       OCG.Gen(OCG.EOR, OCG.mDP, RegAddr(RH - 2), 0);
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH - 2), 0);
@@ -1369,7 +1369,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         load(x);
         OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(x.r), 0);
         OCG.Gen(OCG.EOR, OCG.mImm, 0FFFFH, 0);
-        OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+        OCG.Clc;
         OCG.Gen(OCG.ADC, OCG.mImm, 1, 0);
         OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r), 0)
       END
@@ -1403,7 +1403,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
           IF y.type.form = ORB.Int THEN
             Set16(TRUE, TRUE);
             OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(y.r), 0);
-            OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+            OCG.Clc;
             OCG.Gen(OCG.ADC, OCG.mImm, x.a, 0);
             OCG.Gen(OCG.STA, OCG.mDP, RegAddr(y.r), 0)
           END
@@ -1415,7 +1415,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
           IF x.type.form = ORB.Int THEN
             Set16(TRUE, TRUE);
             OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(x.r), 0);
-            OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+            OCG.Clc;
             OCG.Gen(OCG.ADC, OCG.mImm, y.a, 0);
             OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r), 0)
           END
@@ -1425,7 +1425,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         IF x.type.form = ORB.Int THEN
           destR := RH - 2; Set16(TRUE, TRUE);
           OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(x.r), 0);
-          OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+          OCG.Clc;
           OCG.Gen(OCG.ADC, OCG.mDP, RegAddr(y.r), 0);
           OCG.Gen(OCG.STA, OCG.mDP, RegAddr(destR), 0)
         END;
@@ -1439,7 +1439,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
           IF x.type.form = ORB.Int THEN
             Set16(TRUE, TRUE);
             OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(x.r), 0);
-            OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+            OCG.Sec;
             OCG.Gen(OCG.SBC, OCG.mImm, y.a, 0);
             OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r), 0)
           END
@@ -1449,7 +1449,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         IF x.type.form = ORB.Int THEN
           destR := RH - 2; Set16(TRUE, TRUE);
           OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(x.r), 0);
-          OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+          OCG.Sec;
           OCG.Gen(OCG.SBC, OCG.mDP, RegAddr(y.r), 0);
           OCG.Gen(OCG.STA, OCG.mDP, RegAddr(destR), 0)
         END;
@@ -1474,7 +1474,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     OCG.Gen(OCG.BEQ, OCG.mPCR, OCG.Here() + 2 + 11, 0);
     OCG.Gen(OCG.LSR, OCG.mDP, RegAddr(xr), 0);
     OCG.Gen(OCG.BCC, OCG.mPCR, OCG.Here() + 2 + 3, 0);
-    OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+    OCG.Clc;
     OCG.Gen(OCG.ADC, OCG.mDP, RegAddr(yr), 0);
     OCG.Gen(OCG.ASL, OCG.mDP, RegAddr(yr), 0);
     OCG.Gen(OCG.BRA, OCG.mPCR, OCG.Here() + 2 - 15, 0)
@@ -1489,7 +1489,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       OCG.Gen(OCG.LDX, OCG.mImm, e, 0);
       loopTop := OCG.Here();
       OCG.Gen(OCG.ASL, OCG.mDP, RegAddr(x.r), 0);
-      OCG.Gen(OCG.DEX, OCG.mImpl, 0, 0);
+      OCG.Dex;
       OCG.Gen(OCG.BNE, OCG.mPCR, loopTop, 0)
     ELSIF y.mode = ORB.Const THEN
       load(x); load(y); mulLoop(x.r, y.r);
@@ -1500,7 +1500,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       OCG.Gen(OCG.LDX, OCG.mImm, e, 0);
       loopTop := OCG.Here();
       OCG.Gen(OCG.ASL, OCG.mDP, RegAddr(y.r), 0);
-      OCG.Gen(OCG.DEX, OCG.mImpl, 0, 0);
+      OCG.Dex;
       OCG.Gen(OCG.BNE, OCG.mPCR, loopTop, 0);
       x.mode := Reg; x.r := y.r
     ELSE
@@ -1521,7 +1521,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     OCG.Gen(OCG.CMP, OCG.mDP, RegAddr(divisorReg), 0);
     OCG.Gen(OCG.BCC, OCG.mPCR, OCG.Here() + 2 + 11, 0);
     OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(dividendReg), 0);
-    OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+    OCG.Sec;
     OCG.Gen(OCG.SBC, OCG.mDP, RegAddr(divisorReg), 0);
     OCG.Gen(OCG.STA, OCG.mDP, RegAddr(dividendReg), 0);
     OCG.Gen(OCG.INC, OCG.mDP, RegAddr(quotientReg), 0);
@@ -1646,7 +1646,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       OCG.Gen(OCG.BEQ, OCG.mPCR, skip, 0);
       loopTop := OCG.Here();
       OCG.Gen(OCG.ASL, OCG.mAcc, 0, 0);
-      OCG.Gen(OCG.DEX, OCG.mImpl, 0, 0);
+      OCG.Dex;
       OCG.Gen(OCG.BNE, OCG.mPCR, loopTop, 0);
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r), 0)
     END
@@ -1670,7 +1670,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         OCG.Gen(OCG.BEQ, OCG.mPCR, skip, 0);
         loopTop := OCG.Here();
         OCG.Gen(OCG.ASL, OCG.mAcc, 0, 0);
-        OCG.Gen(OCG.DEX, OCG.mImpl, 0, 0);
+        OCG.Dex;
         OCG.Gen(OCG.BNE, OCG.mPCR, loopTop, 0);
         OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r), 0)
       END;
@@ -1688,7 +1688,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         OCG.Gen(OCG.BEQ, OCG.mPCR, skip, 0);
         loopTop := OCG.Here();
         OCG.Gen(OCG.ASL, OCG.mAcc, 0, 0);
-        OCG.Gen(OCG.DEX, OCG.mImpl, 0, 0);
+        OCG.Dex;
         OCG.Gen(OCG.BNE, OCG.mPCR, loopTop, 0);
         OCG.Gen(OCG.EOR, OCG.mImm, 0FFFFH, 0);
         OCG.Gen(OCG.STA, OCG.mDP, RegAddr(y.r), 0)
@@ -1718,7 +1718,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       OCG.Gen(OCG.BEQ, OCG.mPCR, skip, 0);
       loopTop := OCG.Here();
       OCG.Gen(OCG.ASL, OCG.mAcc, 0, 0);
-      OCG.Gen(OCG.DEX, OCG.mImpl, 0, 0);
+      OCG.Dex;
       OCG.Gen(OCG.BNE, OCG.mPCR, loopTop, 0);
       OCG.Gen(OCG.AND, OCG.mDP, RegAddr(y.r), 0);
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(y.r), 0);
@@ -1799,7 +1799,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         IF (y.a # 0) OR ((op # ORS.eql) & (op # ORS.neq)) THEN
           OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(x.r), 0);
           IF signedCmp THEN
-            OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+            OCG.Sec;
             OCG.Gen(OCG.SBC, OCG.mImm, y.a, 0)
           ELSE
             OCG.Gen(OCG.CMP, OCG.mImm, y.a, 0)
@@ -1811,7 +1811,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         load(x); load(y);
         OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(x.r), 0);
         IF signedCmp THEN
-          OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+          OCG.Sec;
           OCG.Gen(OCG.SBC, OCG.mDP, RegAddr(y.r), 0)
         ELSE
           OCG.Gen(OCG.CMP, OCG.mDP, RegAddr(y.r), 0)
@@ -2018,9 +2018,9 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         loopTop := OCG.Here();
         OCG.Gen(OCG.LDA, OCG.mDPIndY, srcReg, 0);
         OCG.Gen(OCG.STA, OCG.mDPIndY, dstReg, 0);
-        OCG.Gen(OCG.INY, OCG.mImpl, 0, 0);
-        OCG.Gen(OCG.INY, OCG.mImpl, 0, 0);
-        OCG.Gen(OCG.DEX, OCG.mImpl, 0, 0);
+        OCG.Iny;
+        OCG.Iny;
+        OCG.Dex;
         OCG.Gen(OCG.BNE, OCG.mPCR, loopTop, 0)
       ELSIF openSrc THEN
         (* wordCount := (LEN(y) * elemSize + 1) DIV 2, computed in A->X.
@@ -2032,15 +2032,15 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         WHILE i < k DO OCG.Gen(OCG.ASL, OCG.mImpl, 0, 0); i := i + 1 END; (* *elemSize *)
         OCG.Gen(OCG.INC, OCG.mImpl, 0, 0);               (* +1 ... *)
         OCG.Gen(OCG.LSR, OCG.mImpl, 0, 0);               (* ... DIV 2 = wordCount *)
-        OCG.Gen(OCG.TAX, OCG.mImpl, 0, 0);               (* X := wordCount (sets Z) *)
+        OCG.Tax;               (* X := wordCount (sets Z) *)
         OCG.Gen(OCG.BEQ, OCG.mPCR, OCG.Here() + 14, 0);  (* empty -> skip loop *)
         OCG.Gen(OCG.LDY, OCG.mImm, 0, 0);
         loopTop := OCG.Here();
         OCG.Gen(OCG.LDA, OCG.mDPIndY, srcReg, 0);
         OCG.Gen(OCG.STA, OCG.mDPIndY, dstReg, 0);
-        OCG.Gen(OCG.INY, OCG.mImpl, 0, 0);
-        OCG.Gen(OCG.INY, OCG.mImpl, 0, 0);
-        OCG.Gen(OCG.DEX, OCG.mImpl, 0, 0);
+        OCG.Iny;
+        OCG.Iny;
+        OCG.Dex;
         OCG.Gen(OCG.BNE, OCG.mPCR, loopTop, 0)
       END
     END;
@@ -2062,7 +2062,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     OCG.Gen(OCG.LDA, OCG.mDPIndY, RegAddr(y.r), 0);
     OCG.Gen(OCG.STA, OCG.mDPIndY, RegAddr(x.r), 0);
     OCG.Gen(OCG.BEQ, OCG.mPCR, OCG.Here() + 2 + 3, 0);
-    OCG.Gen(OCG.INY, OCG.mImpl, 0, 0);
+    OCG.Iny;
     OCG.Gen(OCG.BRA, OCG.mPCR, loopStart, 0);
     RH := RH - 3
   END CopyString;
@@ -2089,8 +2089,8 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     xmd := x.mode;
     IF (x.mode = ORB.Var) & (x.r > 0) THEN
       Set16(TRUE, TRUE);
-      OCG.Gen(OCG.TSC, OCG.mImpl, 0, 0);
-      OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+      OCG.Tsc;
+      OCG.Clc;
       OCG.Gen(OCG.ADC, OCG.mImm, x.a + frame, 0);
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH), 0);
       x.r := RH; x.mode := Reg; incR;
@@ -2102,7 +2102,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       Set16(TRUE, TRUE);
       OCG.Gen(OCG.LDA, OCG.mDP, sb, 0);
       IF x.a # 0 THEN
-        OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+        OCG.Clc;
         OCG.Gen(OCG.ADC, OCG.mImm, x.a, 0)
       END;
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH), 0);
@@ -2132,7 +2132,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       ELSE
         sb := GetSB(-x.type.mno);
         OCG.Gen(OCG.LDA, OCG.mDP, sb, 0);
-        OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+        OCG.Clc;
         emitTDLen(x.type);
         OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r + 2), 0);
         OCG.Gen(OCG.STZ, OCG.mDP, RegAddr(x.r + 3), 0)
@@ -2149,7 +2149,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   BEGIN
     Set16(TRUE, TRUE);
     OCG.Gen(OCG.LDA, OCG.mDP, SB_DP, 0);
-    OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+    OCG.Clc;
     OCG.Gen(OCG.ADC, OCG.mImm, varsize + x.a, 0);
     OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH), 0);
     OCG.Gen(OCG.STZ, OCG.mDP, RegAddr(RH + 1), 0);
@@ -2174,7 +2174,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       IF z.type.size = 1 THEN Set8(TRUE, FALSE) ELSE Set16(TRUE, TRUE) END;
       IF useSigned THEN
         OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(y.r), 0);
-        OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+        OCG.Sec;
         OCG.Gen(OCG.SBC, OCG.mImm, z.a, 0)
       ELSE OCG.Gen(OCG.CMP, OCG.mImm, z.a, 0)
       END
@@ -2184,7 +2184,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       ELSE Set16(TRUE, TRUE) END;
       IF useSigned THEN
         OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(y.r), 0);
-        OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+        OCG.Sec;
         OCG.Gen(OCG.SBC, OCG.mDP, RegAddr(z.r), 0)
       ELSE
         OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(y.r), 0);
@@ -2206,15 +2206,15 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     load(x);
     IF w.mode = ORB.Const THEN
       IF w.a > 0 THEN
-        OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+        OCG.Clc;
         OCG.Gen(OCG.ADC, OCG.mImm, w.a, 0)
       ELSE
-        OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+        OCG.Sec;
         OCG.Gen(OCG.SBC, OCG.mImm, -w.a, 0)
       END
     ELSE
       load(w);
-      OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+      OCG.Clc;
       OCG.Gen(OCG.ADC, OCG.mDP, RegAddr(w.r), 0);
       RH := RH - 1
     END;
@@ -2243,7 +2243,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     load(x); Set16(TRUE, TRUE);
     OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(x.r), 0);
     RH := RH - 1;
-    OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+    OCG.Sec;
     OCG.Gen(OCG.SBC, OCG.mImm, lo, 0);
     OCG.Gen(OCG.CMP, OCG.mImm, hi - lo + 1, 0);
     OCG.Gen(OCG.BCS, OCG.mPCR, OCG.Here() + 2 + 3, 0);
@@ -2293,7 +2293,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     ri := 0; Set16(TRUE, TRUE); frame := frame + 2 * r;
     REPEAT
       OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(ri), 0);
-      OCG.Gen(OCG.PHA, OCG.mImpl, 0, 0);
+      OCG.Pha;
       ri := ri + 1
     UNTIL ri >= r
   END SaveRegs;
@@ -2304,7 +2304,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     ri := r; Set16(TRUE, TRUE);
     REPEAT
       ri := ri - 1;
-      OCG.Gen(OCG.PLA, OCG.mImpl, 0, 0);
+      OCG.Pla;
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(ri), 0)
     UNTIL ri <= 0;
     frame := frame - 2 * r
@@ -2362,7 +2362,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       addrReg := RegAddr(RH);
       loadIfacePair(x.rcvMode, x.rcvA, x.rcvB, x.rcvR, 4, RH + 6);  (* itable ptr *)
       OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(RH + 6), 0);
-      OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+      OCG.Clc;
       OCG.Gen(OCG.ADC, OCG.mImm, x.methSlot * 2, 0);
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 8), 0);
       OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(RH + 7), 0);
@@ -2370,18 +2370,18 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 9), 0);
       OCG.Gen(OCG.LDA, OCG.mDPIndL, RegAddr(RH + 8), 0);   (* slot index *)
       OCG.Gen(OCG.ASL, OCG.mAcc, 0, 0);                    (* *2 *)
-      OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+      OCG.Clc;
       OCG.Gen(OCG.ADC, OCG.mImm, VtableOff, 0);            (* vtable byte offset *)
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 8), 0);
       OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(0), 0);            (* tag ptr = data - 4 *)
-      OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+      OCG.Sec;
       OCG.Gen(OCG.SBC, OCG.mImm, 4, 0);
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 2), 0);
       OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(1), 0);
       OCG.Gen(OCG.SBC, OCG.mImm, 0, 0);
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 3), 0);
       OCG.Gen(OCG.LDA, OCG.mDPIndL, RegAddr(RH + 2), 0);   (* TD addr lo *)
-      OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+      OCG.Clc;
       OCG.Gen(OCG.ADC, OCG.mDP, RegAddr(RH + 8), 0);       (* + vtable byte offset *)
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 4), 0);
       OCG.Gen(OCG.LDY, OCG.mImm, 2, 0);
@@ -2390,15 +2390,15 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 5), 0);
       OCG.Gen(OCG.LDA, OCG.mDPIndL, RegAddr(RH + 4), 0);   (* method address *)
       OCG.Gen(OCG.STA, OCG.mDP, addrReg, 0);
-      OCG.Gen(OCG.PHK, OCG.mImpl, 0, 0);
+      OCG.Phk;
       OCG.Gen(OCG.PER, OCG.mImm, 09H, 0);
       Set8(TRUE, FALSE);
-      OCG.Gen(OCG.PHK, OCG.mImpl, 0, 0);
+      OCG.Phk;
       Set16(TRUE, FALSE);
       OCG.Gen(OCG.LDA, OCG.mDP, addrReg, 0);
       OCG.Gen(OCG.DEC, OCG.mAcc, 0, 0);
-      OCG.Gen(OCG.PHA, OCG.mImpl, 0, 0);
-      OCG.Gen(OCG.RTL, OCG.mImpl, 0, 0)
+      OCG.Pha;
+      OCG.Rtl
     ELSIF x.dynDisp THEN
       (* dynamic dispatch: receiver (object pointer) is param 0 in R0/R1.
          tag := [obj-4]; addr := [tag + VtableOff + slot*2] — the loader has
@@ -2407,14 +2407,14 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
          bank is the current program bank (PHK). Scratch above RH. *)
       addrReg := RegAddr(RH);
       OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(0), 0);
-      OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+      OCG.Sec;
       OCG.Gen(OCG.SBC, OCG.mImm, 4, 0);
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 2), 0);
       OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(1), 0);
       OCG.Gen(OCG.SBC, OCG.mImm, 0, 0);
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 3), 0);
       OCG.Gen(OCG.LDA, OCG.mDPIndL, RegAddr(RH + 2), 0);   (* TD addr lo *)
-      OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+      OCG.Clc;
       OCG.Gen(OCG.ADC, OCG.mImm, VtableOff + x.methSlot * 2, 0);
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 4), 0);
       OCG.Gen(OCG.LDY, OCG.mImm, 2, 0);
@@ -2423,15 +2423,15 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH + 5), 0);
       OCG.Gen(OCG.LDA, OCG.mDPIndL, RegAddr(RH + 4), 0);   (* method address *)
       OCG.Gen(OCG.STA, OCG.mDP, addrReg, 0);
-      OCG.Gen(OCG.PHK, OCG.mImpl, 0, 0);
+      OCG.Phk;
       OCG.Gen(OCG.PER, OCG.mImm, 09H, 0);
       Set8(TRUE, FALSE);
-      OCG.Gen(OCG.PHK, OCG.mImpl, 0, 0);
+      OCG.Phk;
       Set16(TRUE, FALSE);
       OCG.Gen(OCG.LDA, OCG.mDP, addrReg, 0);
       OCG.Gen(OCG.DEC, OCG.mAcc, 0, 0);
-      OCG.Gen(OCG.PHA, OCG.mImpl, 0, 0);
-      OCG.Gen(OCG.RTL, OCG.mImpl, 0, 0)
+      OCG.Pha;
+      OCG.Rtl
     ELSIF x.mode = ORB.Const THEN
       IF x.r < 0 THEN
         mno := -x.r; exno := x.a;
@@ -2451,21 +2451,21 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
           OCG.Gen(OCG.ORA, OCG.mDP, bankReg, 0);
           Trap(NE, 5)
         END;
-        OCG.Gen(OCG.PHK, OCG.mImpl, 0, 0);
+        OCG.Phk;
         OCG.Gen(OCG.PER, OCG.mImm, 0BH, 0);
         Set8(TRUE, FALSE);
         OCG.Gen(OCG.LDA, OCG.mDP, bankReg, 0);
-        OCG.Gen(OCG.PHA, OCG.mImpl, 0, 0);
+        OCG.Pha;
         Set16(TRUE, FALSE);
         OCG.Gen(OCG.LDA, OCG.mDP, addrReg, 0);
         OCG.Gen(OCG.DEC, OCG.mAcc, 0, 0);
-        OCG.Gen(OCG.PHA, OCG.mImpl, 0, 0);
-        OCG.Gen(OCG.RTL, OCG.mImpl, 0, 0);
+        OCG.Pha;
+        OCG.Rtl;
         RH := RH - 2
       ELSE
-        OCG.Gen(OCG.PLA, OCG.mImpl, 0, 0);
+        OCG.Pla;
         OCG.Gen(OCG.STA, OCG.mDP, RegAddr(1), 0);
-        OCG.Gen(OCG.PLA, OCG.mImpl, 0, 0);
+        OCG.Pla;
         OCG.Gen(OCG.STA, OCG.mDP, RegAddr(0), 0);
         addrReg := RegAddr(0); bankReg := RegAddr(1);
         r := r - 2; frame := frame - 4;
@@ -2474,16 +2474,16 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
           OCG.Gen(OCG.ORA, OCG.mDP, bankReg, 0);
           Trap(NE, 5)
         END;
-        OCG.Gen(OCG.PHK, OCG.mImpl, 0, 0);
+        OCG.Phk;
         OCG.Gen(OCG.PER, OCG.mImm, 0BH, 0);
         Set8(TRUE, FALSE);
         OCG.Gen(OCG.LDA, OCG.mDP, bankReg, 0);
-        OCG.Gen(OCG.PHA, OCG.mImpl, 0, 0);
+        OCG.Pha;
         Set16(TRUE, FALSE);
         OCG.Gen(OCG.LDA, OCG.mDP, addrReg, 0);
         OCG.Gen(OCG.DEC, OCG.mAcc, 0, 0);
-        OCG.Gen(OCG.PHA, OCG.mImpl, 0, 0);
-        OCG.Gen(OCG.RTL, OCG.mImpl, 0, 0)
+        OCG.Pha;
+        OCG.Rtl
       END
     END;
     IF x.type.base.form = ORB.NoTyp THEN
@@ -2531,9 +2531,9 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       Set16(TRUE, TRUE);
       IF curExpo THEN
         OCG.Gen(OCG.LDA, OCG.mDP, SB_DP, 0);
-        OCG.Gen(OCG.PHA, OCG.mImpl, 0, 0);
+        OCG.Pha;
         OCG.Gen(OCG.LDA, OCG.mDP, BANK_DP, 0);
-        OCG.Gen(OCG.PHA, OCG.mImpl, 0, 0);
+        OCG.Pha;
         OCG.AddRel(OCG.Here());
         OCG.Gen(OCG.LDA, OCG.mImm, 0, 0);
         OCG.Gen(OCG.STA, OCG.mDP, SB_DP, 0);
@@ -2542,10 +2542,10 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         OCG.Gen(OCG.STA, OCG.mDP, BANK_DP, 0)
       END;
       IF frameSize > 0 THEN
-        OCG.Gen(OCG.TSC, OCG.mImpl, 0, 0);
-        OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+        OCG.Tsc;
+        OCG.Sec;
         OCG.Gen(OCG.SBC, OCG.mImm, frameSize, 0);
-        OCG.Gen(OCG.TCS, OCG.mImpl, 0, 0)
+        OCG.Tcs
       END;
       r := 0; param := params; Set16(TRUE, TRUE);
       WHILE (param # NIL) & ((param.class = ORB.Var) OR (param.class = ORB.Par)) DO
@@ -2604,9 +2604,9 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       RH := 0
     ELSE
       IF frameSize > 0 THEN
-        OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+        OCG.Sec;
         OCG.Gen(OCG.SBC, OCG.mImm, frameSize, 0);
-        OCG.Gen(OCG.TCS, OCG.mImpl, 0, 0)
+        OCG.Tcs
       END
     END
   END Enter;
@@ -2621,26 +2621,26 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     IF ~curIntProc THEN
       Set16(TRUE, TRUE);
       IF size > 0 THEN
-        OCG.Gen(OCG.TSC, OCG.mImpl, 0, 0);
-        OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+        OCG.Tsc;
+        OCG.Clc;
         OCG.Gen(OCG.ADC, OCG.mImm, size, 0);
-        OCG.Gen(OCG.TCS, OCG.mImpl, 0, 0)
+        OCG.Tcs
       END;
       IF curExpo THEN
-        OCG.Gen(OCG.PLA, OCG.mImpl, 0, 0);
+        OCG.Pla;
         OCG.Gen(OCG.STA, OCG.mDP, BANK_DP, 0);
-        OCG.Gen(OCG.PLA, OCG.mImpl, 0, 0);
+        OCG.Pla;
         OCG.Gen(OCG.STA, OCG.mDP, SB_DP, 0);
-        OCG.Gen(OCG.RTL, OCG.mImpl, 0, 0)
-      ELSE OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0)
+        OCG.Rtl
+      ELSE OCG.Rts
       END
     ELSE
       IF size > 0 THEN
-        OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+        OCG.Clc;
         OCG.Gen(OCG.ADC, OCG.mImm, size, 0);
-        OCG.Gen(OCG.TCS, OCG.mImpl, 0, 0)
+        OCG.Tcs
       END;
-      OCG.Gen(OCG.RTI, OCG.mImpl, 0, 0)
+      OCG.Rti
     END;
     RH := 0
   END Return;
@@ -2663,18 +2663,18 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         IF useIncDec THEN
           IF isInc THEN OCG.Gen(OCG.INC, OCG.mAcc, 0, 0) ELSE OCG.Gen(OCG.DEC, OCG.mAcc, 0, 0) END
         ELSIF isInc THEN
-          OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0); OCG.Gen(OCG.ADC, OCG.mImm, y.a, 0)
+          OCG.Clc; OCG.Gen(OCG.ADC, OCG.mImm, y.a, 0)
         ELSE
-          OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0); OCG.Gen(OCG.SBC, OCG.mImm, y.a, 0)
+          OCG.Sec; OCG.Gen(OCG.SBC, OCG.mImm, y.a, 0)
         END;
         OCG.Gen(OCG.STA, OCG.mDP, RegAddr(zr), 0)
       ELSE
         load(y);
         OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(zr), 0);
         IF isInc THEN
-          OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0); OCG.Gen(OCG.ADC, OCG.mDP, RegAddr(y.r), 0)
+          OCG.Clc; OCG.Gen(OCG.ADC, OCG.mDP, RegAddr(y.r), 0)
         ELSE
-          OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0); OCG.Gen(OCG.SBC, OCG.mDP, RegAddr(y.r), 0)
+          OCG.Sec; OCG.Gen(OCG.SBC, OCG.mDP, RegAddr(y.r), 0)
         END;
         OCG.Gen(OCG.STA, OCG.mDP, RegAddr(zr), 0); RH := RH - 1
       END;
@@ -2694,18 +2694,18 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         IF useIncDec THEN
           IF isInc THEN OCG.Gen(OCG.INC, OCG.mAcc, 0, 0) ELSE OCG.Gen(OCG.DEC, OCG.mAcc, 0, 0) END
         ELSIF isInc THEN
-          OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0); OCG.Gen(OCG.ADC, OCG.mImm, y.a, 0)
+          OCG.Clc; OCG.Gen(OCG.ADC, OCG.mImm, y.a, 0)
         ELSE
-          OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0); OCG.Gen(OCG.SBC, OCG.mImm, y.a, 0)
+          OCG.Sec; OCG.Gen(OCG.SBC, OCG.mImm, y.a, 0)
         END;
         OCG.Gen(OCG.STA, OCG.mDP, RegAddr(zr), 0)
       ELSE
         load(y);
         OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(zr), 0);
         IF isInc THEN
-          OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0); OCG.Gen(OCG.ADC, OCG.mDP, RegAddr(y.r), 0)
+          OCG.Clc; OCG.Gen(OCG.ADC, OCG.mDP, RegAddr(y.r), 0)
         ELSE
-          OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0); OCG.Gen(OCG.SBC, OCG.mDP, RegAddr(y.r), 0)
+          OCG.Sec; OCG.Gen(OCG.SBC, OCG.mDP, RegAddr(y.r), 0)
         END;
         OCG.Gen(OCG.STA, OCG.mDP, RegAddr(zr), 0); RH := RH - 1
       END;
@@ -2741,7 +2741,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         OCG.Gen(OCG.BEQ, OCG.mPCR, skip, 0);
         loopTop := OCG.Here();
         OCG.Gen(OCG.ASL, OCG.mAcc, 0, 0);
-        OCG.Gen(OCG.DEX, OCG.mImpl, 0, 0);
+        OCG.Dex;
         OCG.Gen(OCG.BNE, OCG.mPCR, loopTop, 0);
         IF inorex = 0 THEN OCG.Gen(OCG.ORA, OCG.mDP, RegAddr(zr), 0)
         ELSE
@@ -2774,7 +2774,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         OCG.Gen(OCG.BEQ, OCG.mPCR, skip, 0);
         loopTop := OCG.Here();
         OCG.Gen(OCG.ASL, OCG.mAcc, 0, 0);
-        OCG.Gen(OCG.DEX, OCG.mImpl, 0, 0);
+        OCG.Dex;
         OCG.Gen(OCG.BNE, OCG.mPCR, loopTop, 0);
         IF inorex = 0 THEN OCG.Gen(OCG.ORA, OCG.mDP, RegAddr(zr), 0)
         ELSE
@@ -2808,7 +2808,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     Set16(TRUE, TRUE);
     sb := GetSB(-baseType.mno);
     OCG.Gen(OCG.LDA, OCG.mDP, sb, 0);
-    OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+    OCG.Clc;
     emitTDLen(baseType);
     OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH), 0);
     OCG.Gen(OCG.STZ, OCG.mDP, RegAddr(RH + 1), 0);
@@ -2822,7 +2822,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     OCG.Gen(OCG.LDY, OCG.mImm, 2, 0);
     OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(RH - 1), 0);
     OCG.Gen(OCG.STA, OCG.mDPIndLY, RegAddr(RH), 0);
-    OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+    OCG.Clc;
     OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(RH), 0);
     OCG.Gen(OCG.ADC, OCG.mImm, 4, 0);
     OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH), 0);
@@ -2888,8 +2888,8 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     loopTop := OCG.Here();
     OCG.Gen(OCG.LDA, OCG.mDPIndY, RegAddr(x.r), 0);
     OCG.Gen(OCG.STA, OCG.mDPIndY, RegAddr(y.r), 0);
-    OCG.Gen(OCG.INY, OCG.mImpl, 0, 0);
-    OCG.Gen(OCG.INY, OCG.mImpl, 0, 0);
+    OCG.Iny;
+    OCG.Iny;
     OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(z.r), 0);
     OCG.Gen(OCG.DEC, OCG.mAcc, 0, 0);
     OCG.Gen(OCG.STA, OCG.mDP, RegAddr(z.r), 0);
@@ -2936,22 +2936,22 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     load(addr); load(bank);
     addrReg := RegAddr(addr.r); bankReg := RegAddr(bank.r);
     OCG.Gen(OCG.LDA, OCG.mDP, SB_DP, 0);
-    OCG.Gen(OCG.PHA, OCG.mImpl, 0, 0);
+    OCG.Pha;
     OCG.Gen(OCG.LDA, OCG.mDP, BANK_DP, 0);
-    OCG.Gen(OCG.PHA, OCG.mImpl, 0, 0);
-    OCG.Gen(OCG.PHK, OCG.mImpl, 0, 0);
+    OCG.Pha;
+    OCG.Phk;
     OCG.Gen(OCG.PER, OCG.mImm, 0BH, 0);
     Set8(TRUE, FALSE);
     OCG.Gen(OCG.LDA, OCG.mDP, bankReg, 0);
-    OCG.Gen(OCG.PHA, OCG.mImpl, 0, 0);
+    OCG.Pha;
     Set16(TRUE, FALSE);
     OCG.Gen(OCG.LDA, OCG.mDP, addrReg, 0);
     OCG.Gen(OCG.DEC, OCG.mAcc, 0, 0);
-    OCG.Gen(OCG.PHA, OCG.mImpl, 0, 0);
-    OCG.Gen(OCG.RTL, OCG.mImpl, 0, 0);
-    OCG.Gen(OCG.PLA, OCG.mImpl, 0, 0);
+    OCG.Pha;
+    OCG.Rtl;
+    OCG.Pla;
     OCG.Gen(OCG.STA, OCG.mDP, BANK_DP, 0);
-    OCG.Gen(OCG.PLA, OCG.mImpl, 0, 0);
+    OCG.Pla;
     OCG.Gen(OCG.STA, OCG.mDP, SB_DP, 0);
     RH := RH - 2
   END Exec;
@@ -3126,7 +3126,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       OCG.Gen(OCG.BEQ, OCG.mPCR, OCG.Here() + 2 + 4, 0);
       loopTop := OCG.Here();
       OCG.Gen(OCG.ASL, OCG.mAcc, 0, 0);
-      OCG.Gen(OCG.DEX, OCG.mImpl, 0, 0);
+      OCG.Dex;
       OCG.Gen(OCG.BNE, OCG.mPCR, loopTop, 0);
       OCG.Gen(OCG.AND, OCG.mDP, RegAddr(x.r), 0);
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(x.r), 0);
@@ -3273,18 +3273,18 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     p3 := emitFwdBranch(OCG.BEQ);   (* BEQ → ret_zero *)
     OCG.Gen(OCG.LDA, OCG.mImm, 0FFFFH, 0);
     OCG.Gen(OCG.STA, OCG.mDP, FP_A_LO, 0);
-    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+    OCG.Rts;
   (* ret_zero: *)
     patch(p2); patch(p3);
     OCG.Gen(OCG.LDA, OCG.mImm, 0000H, 0);
     OCG.Gen(OCG.STA, OCG.mDP, FP_A_LO, 0);
-    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+    OCG.Rts;
 
   (* has_exp: *)
     patch(p1);
   (* unbiased = exp - 127 *)
     OCG.Gen(OCG.LDA, OCG.mDP, FP_EXP, 0);
-    OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+    OCG.Sec;
     OCG.Gen(OCG.SBC, OCG.mImm, 127, 0);
     OCG.Gen(OCG.STA, OCG.mDP, FP_EXP, 0);
 
@@ -3296,7 +3296,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     OCG.Gen(OCG.BRA, OCG.mPCR, OCG.Here() + 2 + 3, 0);   (* BRA → store *)
     OCG.Gen(OCG.LDA, OCG.mImm, 0FFFFH, 0);
     OCG.Gen(OCG.STA, OCG.mDP, FP_A_LO, 0);
-    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+    OCG.Rts;
     patch(p1);
 
   (* If unbiased >= 15: clamp *)
@@ -3308,7 +3308,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     OCG.Gen(OCG.BRA, OCG.mPCR, OCG.Here() + 2 + 3, 0);   (* BRA → st_ovf *)
     OCG.Gen(OCG.LDA, OCG.mImm, 8000H, 0);
     OCG.Gen(OCG.STA, OCG.mDP, FP_A_LO, 0);
-    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+    OCG.Rts;
     patch(p1);
 
   (* Build 24-bit mantissa with implicit 1 *)
@@ -3324,7 +3324,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
 
   (* shift_count = 23 - unbiased (always > 0 since unbiased < 15) *)
     OCG.Gen(OCG.LDA, OCG.mImm, 23, 0);
-    OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+    OCG.Sec;
     OCG.Gen(OCG.SBC, OCG.mDP, FP_EXP, 0);
     p1 := emitFwdBranch(OCG.BEQ);   (* BEQ → done_shift *)
     OCG.Gen(OCG.STA, OCG.mDP, FP_CNT, 0);
@@ -3344,7 +3344,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   (* positive: store directly *)
     OCG.Gen(OCG.LDA, OCG.mDP, FP_M1_LO, 0);
     OCG.Gen(OCG.STA, OCG.mDP, FP_A_LO, 0);
-    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+    OCG.Rts;
 
   (* negative: negate magnitude; if fractional bits, add 1 before negate *)
     patch(p1);
@@ -3357,7 +3357,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     OCG.Gen(OCG.EOR, OCG.mImm, 0FFFFH, 0);
     OCG.Gen(OCG.INC, OCG.mAcc, 0, 0);
     OCG.Gen(OCG.STA, OCG.mDP, FP_A_LO, 0);
-    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+    OCG.Rts;
   END emitFP_FLOOR;
 
   (* --- FLT: signed 16-bit integer → IEEE 754 single --- *)
@@ -3373,7 +3373,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   (* If zero, return +0.0 *)
     p1 := emitFwdBranch(OCG.BNE);   (* BNE → nonzero *)
     OCG.Gen(OCG.STZ, OCG.mDP, FP_A_HI, 0);
-    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+    OCG.Rts;
     patch(p1);
 
   (* Save sign, take absolute value *)
@@ -3408,27 +3408,27 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     OCG.Gen(OCG.STA, OCG.mDP, FP_TEMP, 0);
   (* mantissa_lo = (TEMP & 0xFF) << 8 *)
     OCG.Gen(OCG.AND, OCG.mImm, 00FFH, 0);
-    OCG.Gen(OCG.XBA, OCG.mImpl, 0, 0);
+    OCG.Xba;
     OCG.Gen(OCG.STA, OCG.mDP, FP_A_LO, 0);
 
   (* mantissa_hi = (TEMP >> 8) & 0x7F *)
     OCG.Gen(OCG.LDA, OCG.mDP, FP_TEMP, 0);
-    OCG.Gen(OCG.XBA, OCG.mImpl, 0, 0);
+    OCG.Xba;
     OCG.Gen(OCG.AND, OCG.mImm, 007FH, 0);
 
   (* exponent = 127 + 15 - shift_count *)
     OCG.Gen(OCG.STA, OCG.mDP, FP_TEMP, 0);
     OCG.Gen(OCG.LDA, OCG.mImm, 127 + 15, 0);
-    OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+    OCG.Sec;
     OCG.Gen(OCG.SBC, OCG.mDP, FP_CNT, 0);
   (* Shift exp left 7: XBA (<<8) then LSR (>>1) = <<7 *)
-    OCG.Gen(OCG.XBA, OCG.mImpl, 0, 0);
+    OCG.Xba;
     OCG.Gen(OCG.LSR, OCG.mAcc, 0, 0);
     OCG.Gen(OCG.AND, OCG.mImm, 7F80H, 0);
     OCG.Gen(OCG.ORA, OCG.mDP, FP_TEMP, 0);
     OCG.Gen(OCG.ORA, OCG.mDP, FP_SIGN, 0);
     OCG.Gen(OCG.STA, OCG.mDP, FP_A_HI, 0);
-    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+    OCG.Rts;
   END emitFP_FLT;
 
   (* --- FADD: IEEE 754 single addition --- *)
@@ -3450,7 +3450,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     OCG.Gen(OCG.STA, OCG.mDP, FP_A_LO, 0);
     OCG.Gen(OCG.LDA, OCG.mDP, FP_B_HI, 0);
     OCG.Gen(OCG.STA, OCG.mDP, FP_A_HI, 0);
-    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+    OCG.Rts;
     patch(p1);
 
   (* Check B for zero *)
@@ -3458,7 +3458,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     OCG.Gen(OCG.ORA, OCG.mDP, FP_B_HI, 0);
     OCG.Gen(OCG.AND, OCG.mImm, 7FFFH, 0);
     p1 := emitFwdBranch(OCG.BNE);   (* BNE → b_nonzero *)
-    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+    OCG.Rts;
     patch(p1);
 
   (* Extract sign_a *)
@@ -3530,7 +3530,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
 
   (* Align mantissas: shift M2 right by (exp_a - exp_b) *)
     OCG.Gen(OCG.LDA, OCG.mDP, FP_EXP, 0);
-    OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+    OCG.Sec;
     OCG.Gen(OCG.SBC, OCG.mDP, FP_TEMP, 0);
     p1 := emitFwdBranch(OCG.BEQ);   (* BEQ → aligned (no shift needed) *)
   (* If shift >= 24, M2 becomes zero *)
@@ -3554,7 +3554,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     p1 := emitFwdBranch(OCG.BNE);   (* BNE → diff_signs *)
 
   (* Same signs: add mantissas *)
-    OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+    OCG.Clc;
     OCG.Gen(OCG.LDA, OCG.mDP, FP_M1_LO, 0);
     OCG.Gen(OCG.ADC, OCG.mDP, FP_M2_LO, 0);
     OCG.Gen(OCG.STA, OCG.mDP, FP_M1_LO, 0);
@@ -3574,7 +3574,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     patch(p1);   (* diff_signs *)
 
   (* Different signs: subtract smaller from larger (M1 >= M2 after exponent alignment) *)
-    OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+    OCG.Sec;
     OCG.Gen(OCG.LDA, OCG.mDP, FP_M1_LO, 0);
     OCG.Gen(OCG.SBC, OCG.mDP, FP_M2_LO, 0);
     OCG.Gen(OCG.STA, OCG.mDP, FP_M1_LO, 0);
@@ -3588,7 +3588,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   (* Result is zero *)
     OCG.Gen(OCG.STZ, OCG.mDP, FP_A_LO, 0);
     OCG.Gen(OCG.STZ, OCG.mDP, FP_A_HI, 0);
-    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+    OCG.Rts;
     patch(p3);
 
   (* Normalize: shift left until bit 7 of M1_HI is set (bit 23 of mantissa) *)
@@ -3606,7 +3606,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   (* Pack result: FP_A_HI = sign | (exp << 7) | (M1_HI & 0x7F) *)
   (* FP_A_LO = M1_LO *)
     OCG.Gen(OCG.LDA, OCG.mDP, FP_EXP, 0);
-    OCG.Gen(OCG.XBA, OCG.mImpl, 0, 0);
+    OCG.Xba;
     OCG.Gen(OCG.LSR, OCG.mAcc, 0, 0);
     OCG.Gen(OCG.AND, OCG.mImm, 7F80H, 0);
     OCG.Gen(OCG.STA, OCG.mDP, FP_A_HI, 0);
@@ -3617,7 +3617,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     OCG.Gen(OCG.STA, OCG.mDP, FP_A_HI, 0);
     OCG.Gen(OCG.LDA, OCG.mDP, FP_M1_LO, 0);
     OCG.Gen(OCG.STA, OCG.mDP, FP_A_LO, 0);
-    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+    OCG.Rts;
   END emitFP_ADD;
 
   (* --- FMUL: IEEE 754 single multiplication --- *)
@@ -3635,7 +3635,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     p1 := emitFwdBranch(OCG.BNE);   (* BNE → a_nz *)
     OCG.Gen(OCG.STZ, OCG.mDP, FP_A_LO, 0);
     OCG.Gen(OCG.STZ, OCG.mDP, FP_A_HI, 0);
-    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+    OCG.Rts;
     patch(p1);
 
   (* Check B for zero *)
@@ -3645,7 +3645,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     p1 := emitFwdBranch(OCG.BNE);   (* BNE → b_nz *)
     OCG.Gen(OCG.STZ, OCG.mDP, FP_A_LO, 0);
     OCG.Gen(OCG.STZ, OCG.mDP, FP_A_HI, 0);
-    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+    OCG.Rts;
     patch(p1);
 
   (* Result sign = sign_a XOR sign_b *)
@@ -3665,9 +3665,9 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     OCG.Gen(OCG.AND, OCG.mImm, 7F80H, 0);
     i := 0;
     WHILE i < 7 DO OCG.Gen(OCG.LSR, OCG.mAcc, 0, 0); i := i + 1 END;
-    OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+    OCG.Clc;
     OCG.Gen(OCG.ADC, OCG.mDP, FP_EXP, 0);
-    OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+    OCG.Sec;
     OCG.Gen(OCG.SBC, OCG.mImm, 127, 0);
     OCG.Gen(OCG.STA, OCG.mDP, FP_EXP, 0);
 
@@ -3700,7 +3700,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     OCG.Gen(OCG.AND, OCG.mImm, 0001H, 0);
     p1 := emitFwdBranch(OCG.BEQ);   (* BEQ → no_add *)
   (* Add M1 to PROD (48-bit add) *)
-    OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+    OCG.Clc;
     OCG.Gen(OCG.LDA, OCG.mDP, FP_PROD0, 0);
     OCG.Gen(OCG.ADC, OCG.mDP, FP_M1_LO, 0);
     OCG.Gen(OCG.STA, OCG.mDP, FP_PROD0, 0);
@@ -3738,7 +3738,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
 
   (* Pack: FP_A_HI = sign | (exp << 7) | (PROD1 & 0x7F), FP_A_LO = PROD0 *)
     OCG.Gen(OCG.LDA, OCG.mDP, FP_EXP, 0);
-    OCG.Gen(OCG.XBA, OCG.mImpl, 0, 0);
+    OCG.Xba;
     OCG.Gen(OCG.LSR, OCG.mAcc, 0, 0);
     OCG.Gen(OCG.AND, OCG.mImm, 7F80H, 0);
     OCG.Gen(OCG.STA, OCG.mDP, FP_A_HI, 0);
@@ -3749,7 +3749,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     OCG.Gen(OCG.STA, OCG.mDP, FP_A_HI, 0);
     OCG.Gen(OCG.LDA, OCG.mDP, FP_PROD0, 0);
     OCG.Gen(OCG.STA, OCG.mDP, FP_A_LO, 0);
-    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+    OCG.Rts;
   END emitFP_MUL;
 
   (* --- FDIV: IEEE 754 single division --- *)
@@ -3775,7 +3775,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     p1 := emitFwdBranch(OCG.BNE);   (* BNE → a_nz *)
     OCG.Gen(OCG.STZ, OCG.mDP, FP_A_LO, 0);
     OCG.Gen(OCG.STZ, OCG.mDP, FP_A_HI, 0);
-    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+    OCG.Rts;
     patch(p1);
 
   (* Result sign = sign_a XOR sign_b *)
@@ -3798,9 +3798,9 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     OCG.Gen(OCG.STA, OCG.mDP, FP_TEMP, 0);
 
     OCG.Gen(OCG.LDA, OCG.mDP, FP_EXP, 0);
-    OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+    OCG.Sec;
     OCG.Gen(OCG.SBC, OCG.mDP, FP_TEMP, 0);
-    OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+    OCG.Clc;
     OCG.Gen(OCG.ADC, OCG.mImm, 127, 0);
     OCG.Gen(OCG.STA, OCG.mDP, FP_EXP, 0);
 
@@ -3828,7 +3828,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
 
     loop := OCG.Here();
   (* Step 1: Try subtract remainder - divisor *)
-    OCG.Gen(OCG.SEC, OCG.mImpl, 0, 0);
+    OCG.Sec;
     OCG.Gen(OCG.LDA, OCG.mDP, FP_M1_LO, 0);
     OCG.Gen(OCG.SBC, OCG.mDP, FP_M2_LO, 0);
     OCG.Gen(OCG.STA, OCG.mDP, FP_TEMP, 0);
@@ -3872,7 +3872,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
 
   (* Pack result *)
     OCG.Gen(OCG.LDA, OCG.mDP, FP_EXP, 0);
-    OCG.Gen(OCG.XBA, OCG.mImpl, 0, 0);
+    OCG.Xba;
     OCG.Gen(OCG.LSR, OCG.mAcc, 0, 0);
     OCG.Gen(OCG.AND, OCG.mImm, 7F80H, 0);
     OCG.Gen(OCG.STA, OCG.mDP, FP_A_HI, 0);
@@ -3883,7 +3883,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     OCG.Gen(OCG.STA, OCG.mDP, FP_A_HI, 0);
     OCG.Gen(OCG.LDA, OCG.mDP, FP_PROD0, 0);
     OCG.Gen(OCG.STA, OCG.mDP, FP_A_LO, 0);
-    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+    OCG.Rts;
   END emitFP_DIV;
 
   (* --- FCMP: IEEE 754 single comparison → -1/0/+1 in FP_A_LO --- *)
@@ -3905,7 +3905,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     p1 := emitFwdBranch(OCG.BNE);   (* BNE → not_both_zero *)
     OCG.Gen(OCG.LDA, OCG.mImm, 0, 0);
     OCG.Gen(OCG.STA, OCG.mDP, FP_A_LO, 0);
-    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+    OCG.Rts;
     patch(p1);
 
   (* Sign comparison *)
@@ -3924,7 +3924,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     OCG.Gen(OCG.BRA, OCG.mPCR, OCG.Here() + 2 + 3, 0);
     OCG.Gen(OCG.LDA, OCG.mImm, 0FFFFH, 0);
     OCG.Gen(OCG.STA, OCG.mDP, FP_A_LO, 0);
-    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+    OCG.Rts;
     patch(p1);
 
   (* Same sign: compare hi magnitude *)
@@ -3951,7 +3951,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     OCG.Gen(OCG.INC, OCG.mAcc, 0, 0);
     patch(p2);
     OCG.Gen(OCG.STA, OCG.mDP, FP_A_LO, 0);
-    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+    OCG.Rts;
     patch(p1);   (* hi_equal *)
 
   (* Compare lo words *)
@@ -3972,11 +3972,11 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     OCG.Gen(OCG.INC, OCG.mAcc, 0, 0);
     patch(p2);
     OCG.Gen(OCG.STA, OCG.mDP, FP_A_LO, 0);
-    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+    OCG.Rts;
     patch(p1);   (* equal *)
     OCG.Gen(OCG.LDA, OCG.mImm, 0, 0);
     OCG.Gen(OCG.STA, OCG.mDP, FP_A_LO, 0);
-    OCG.Gen(OCG.RTS, OCG.mImpl, 0, 0);
+    OCG.Rts;
   END emitFP_CMP;
 
 
@@ -4012,7 +4012,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       name: ARRAY 256 OF CHAR; F: Files.File; R: Files.Rider;
   BEGIN
     (* Exit: emulator calls main with JSL, return with RTL *)
-    OCG.Gen(OCG.RTL, OCG.mImpl, 0, 0);
+    OCG.Rtl;
     emitFPSubroutines; fixupFPCalls;
     (* deferred descriptors already generated by FinalizeTDs (before Export,
        so record T.len is written to the .smb — cross-module type tests and
@@ -4222,7 +4222,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         load(x);
         Set16(TRUE, TRUE);
         OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(x.r), 0);
-        OCG.Gen(OCG.PHA, OCG.mImpl, 0, 0);
+        OCG.Pha;
         RH := RH - 1; frame := frame + 2;
         x.mode := ORB.Var; x.r := 1; x.a := 1 - frame;
         forPushed[forDepth] := TRUE
@@ -4239,7 +4239,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       forDepth := forDepth - 1;
       IF forPushed[forDepth] THEN
         Set16(TRUE, TRUE);
-        OCG.Gen(OCG.PLA, OCG.mImpl, 0, 0);   (* discard the spilled limit *)
+        OCG.Pla;   (* discard the spilled limit *)
         frame := frame - 2
       END
     END
@@ -4274,7 +4274,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     Set16(TRUE, TRUE);
     sb := GetSB(-rec.mno);
     OCG.Gen(OCG.LDA, OCG.mDP, sb, 0);
-    OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+    OCG.Clc;
     emitTDLen(rec);
     OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH), 0);
     OCG.Gen(OCG.STZ, OCG.mDP, RegAddr(RH + 1), 0);
@@ -4288,7 +4288,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     OCG.Gen(OCG.LDY, OCG.mImm, 2, 0);
     OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(RH - 1), 0);
     OCG.Gen(OCG.STA, OCG.mDPIndLY, RegAddr(RH), 0);
-    OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+    OCG.Clc;
     OCG.Gen(OCG.LDA, OCG.mDP, RegAddr(RH), 0);
     OCG.Gen(OCG.ADC, OCG.mImm, 4, 0);
     OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH), 0);
@@ -4363,7 +4363,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       idx := RegisterItable(x.type.base, ift);
       Set16(TRUE, TRUE);
       OCG.Gen(OCG.LDA, OCG.mDP, SB_DP, 0);
-      OCG.Gen(OCG.CLC, OCG.mImpl, 0, 0);
+      OCG.Clc;
       emitItabOffset(idx);        (* A := SB + itable_offset *)
       OCG.Gen(OCG.STA, OCG.mDP, RegAddr(RH), 0);
       OCG.Gen(OCG.LDA, OCG.mDP, BANK_DP, 0);
