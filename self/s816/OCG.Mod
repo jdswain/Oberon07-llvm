@@ -615,6 +615,19 @@ MODULE OCG; (* 65C816 instruction encoder.
     END
   END Gen;
 
+  (* Arity-narrowed entry points so ORG needn't pass unused operands: the
+     instruction selector is packed as op*32 + mode (mode < 32), a compile-
+     time constant at most sites, so a call materialises ONE constant plus its
+     real operand(s) instead of the four Gen takes. gen1 = one operand
+     (v2 = 0); gen2 = two. Both route through Gen for mode-opt + the peephole. *)
+  PROCEDURE gen1*(sel, v1: LONGINT);
+  BEGIN Gen(sel DIV 32, sel MOD 32, v1, 0)
+  END gen1;
+
+  PROCEDURE gen2*(sel, v1, v2: LONGINT);
+  BEGIN Gen(sel DIV 32, sel MOD 32, v1, v2)
+  END gen2;
+
   (* --- accessors for ORG --- *)
   PROCEDURE Here*(): LONGINT;         BEGIN peepReg := -1; RETURN pc END Here;
   PROCEDURE SetPc*(p: LONGINT);       BEGIN pc := p END SetPc;
