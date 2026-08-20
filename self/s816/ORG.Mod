@@ -11,7 +11,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
    from what shared ORP passes, the Oberon procedures adopt ORP's
    signatures and derive what the 816 logic needs. *)
 
-  IMPORT SYSTEM, OCG, ORS, ORB, ORGFP, Files;
+  IMPORT SYSTEM, OCG, ORS, ORB, ORGFP, ORGW, Files;
 
   CONST
     (* --- target parameters (read by the shared frontend) --- *)
@@ -76,23 +76,18 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     check: BOOLEAN;
     version: INTEGER;
     relmap: ARRAY 6 OF INTEGER;
-    data: ARRAY maxTD OF LONGINT;      (* 16-bit TD words (LONGINT so
-                                          0FFFFH fits a 16-bit-INTEGER host) *)
-    str: ARRAY maxStrx OF INTEGER;     (* string/const data bytes *)
-    tdFixupOff, tdFixupMno: ARRAY maxTD OF INTEGER;
+    wa: ORGW.ModArrays;               (* module-image scratch: str/data/tdFixup*/vtFix* *)
     tdFixupC: INTEGER;
     (* deferred type descriptors (classic Oberon-2 single-pass): types are
        recorded at declaration and their descriptors generated at Close,
        placed after the variables + strings so the vtable size is known.
        New/TypeTest emit T.len as a forward fixup patched in GenTDs. *)
-    tdList: ARRAY maxTD OF ORB.Type;
+    tdList: ARRAY maxTD OF ORB.Type;  (* kept out of wa: array of ptrs (see ORGW.ModArrays) *)
     tdListC: INTEGER;
     tdBase: LONGINT;                              (* var-relative base of TD region *)
     tdRefLoc: ARRAY maxTD OF LONGINT;             (* code sites needing a T.len *)
     tdRefTyp: ARRAY maxTD OF ORB.Type;
     tdRefC: INTEGER;
-    entryVal: ARRAY maxEnt OF LONGINT;            (* .816 entry table, by exno *)
-    vtFixOff, vtFixMno, vtFixExno: ARRAY maxVtFix OF LONGINT;  (* vtable slot fixups *)
     vtFixC: INTEGER;
     slotMeth: ARRAY maxMeth OF ORB.Object;        (* method per vtable slot *)
     slotMno: ARRAY maxMeth OF LONGINT;            (* its defining type's mno *)
@@ -760,7 +755,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     IF strx + len < maxStrx THEN
       i := 0;
       WHILE len > 0 DO
-        str[strx] := ORD(ORS.str[i]); strx := strx + 1; i := i + 1; len := len - 1
+        wa.str[strx] := ORD(ORS.str[i]); strx := strx + 1; i := i + 1; len := len - 1
       END
     ELSE ORS.Mark("too many strings")
     END
@@ -777,7 +772,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
 
   PROCEDURE PutByte*(b: INTEGER);
   BEGIN
-    IF strx < maxStrx THEN str[strx] := b MOD 100H; strx := strx + 1
+    IF strx < maxStrx THEN wa.str[strx] := b MOD 100H; strx := strx + 1
     ELSE ORS.Mark("string space overflow")
     END
   END PutByte;
@@ -789,7 +784,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     VAR i: LONGINT;
   BEGIN i := 0;
     WHILE i < size DO
-      IF off + i < maxStrx THEN str[off + i] := val MOD 100H END;
+      IF off + i < maxStrx THEN wa.str[off + i] := val MOD 100H END;
       val := val DIV 100H; i := i + 1
     END
   END PatchStr;
@@ -801,7 +796,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   BEGIN i := 0;
     WHILE i < size DO
       IF (dstOff + i < maxStrx) & (srcOff + i < maxStrx) THEN
-        str[dstOff + i] := str[srcOff + i]
+        wa.str[dstOff + i] := wa.str[srcOff + i]
       END;
       i := i + 1
     END
@@ -1031,8 +1026,8 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   BEGIN
     IF T.base # NIL THEN
       Q(T.base, dcw);
-      data[dcw] := T.len; data[dcw + 1] := 0;
-      tdFixupOff[tdFixupC] := tdBase + dcw * 2; tdFixupMno[tdFixupC] := T.mno;
+      wa.data[dcw] := T.len; wa.data[dcw + 1] := 0;
+      wa.tdFixupOff[tdFixupC] := tdBase + dcw * 2; wa.tdFixupMno[tdFixupC] := T.mno;
       tdFixupC := tdFixupC + 1;
       dcw := dcw + 2
     END
@@ -1042,7 +1037,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     VAR fld: ORB.Object; i, s: LONGINT;
   BEGIN
     IF (typ.form = ORB.Pointer) OR (typ.form = ORB.NilTyp) THEN
-      data[dcw] := off; dcw := dcw + 1
+      wa.data[dcw] := off; dcw := dcw + 1
     ELSIF typ.form = ORB.Record THEN
       fld := typ.dsc;
       WHILE fld # NIL DO
@@ -1113,13 +1108,13 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     WHILE m # NIL DO
       IF (m.val >= 0) & (m.val < nm) THEN
         rm := ORB.FindMeth(rec, m.name);
-        IF rm # NIL THEN data[vtword + m.val] := rm.val END
+        IF rm # NIL THEN wa.data[vtword + m.val] := rm.val END
       END;
       m := m.next
     END
   END fillItab;
 
-  (* Generate every recorded descriptor into data[], placed at var-relative
+  (* Generate every recorded descriptor into wa.data[], placed at var-relative
      offset tdBase = varsize + strx (after the variables and strings), and
      patch the forward T.len references. Called from Close. *)
   PROCEDURE GenTDs;
@@ -1129,13 +1124,13 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     WHILE i < tdListC DO
       T := tdList[i];
       T.len := tdBase + dcw * 2;
-      data[dcw] := T.size; dcw := dcw + 1;
+      wa.data[dcw] := T.size; dcw := dcw + 1;
       k := T.nofpar;
       IF k > 3 THEN ORS.Mark("ext level too large")
       ELSE
         Q(T, dcw);
         WHILE k < 3 DO
-          data[dcw] := 0FFFFH; data[dcw + 1] := 0FFFFH;
+          wa.data[dcw] := 0FFFFH; wa.data[dcw + 1] := 0FFFFH;
           dcw := dcw + 2; k := k + 1
         END
       END;
@@ -1148,24 +1143,24 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
          method reachable from any module. *)
       nm := ORB.TotalMeths(T);
       IF nm > maxMeth THEN ORS.Mark("too many methods"); nm := 0 END;
-      data[dcw] := nm; dcw := dcw + 1;
+      wa.data[dcw] := nm; dcw := dcw + 1;
       IF nm > 0 THEN
         s := 0; WHILE s < nm DO slotMeth[s] := NIL; slotMno[s] := 0; s := s + 1 END;
         fillVt(T, nm);
         s := 0;
         WHILE s < nm DO
-          IF slotMeth[s] = NIL THEN data[dcw + s] := 0   (* abstract: no impl *)
+          IF slotMeth[s] = NIL THEN wa.data[dcw + s] := 0   (* abstract: no impl *)
           ELSE
             IF vtFixC >= maxVtFix THEN ORS.Mark("too many vtable fixups")
             ELSE
-              vtFixOff[vtFixC] := tdBase + (dcw + s) * 2;
+              wa.vtFixOff[vtFixC] := tdBase + (dcw + s) * 2;
               IF slotMno[s] <= 0 THEN   (* own method: slot = base + offset *)
-                data[dcw + s] := slotMeth[s].backend;
-                vtFixMno[vtFixC] := 0; vtFixExno[vtFixC] := 0
+                wa.data[dcw + s] := slotMeth[s].backend;
+                wa.vtFixMno[vtFixC] := 0; wa.vtFixExno[vtFixC] := 0
               ELSE                      (* imported inherited: loader resolves *)
-                data[dcw + s] := 0;
-                vtFixMno[vtFixC] := slotMno[s];
-                vtFixExno[vtFixC] := slotMeth[s].exno
+                wa.data[dcw + s] := 0;
+                wa.vtFixMno[vtFixC] := slotMno[s];
+                wa.vtFixExno[vtFixC] := slotMeth[s].exno
               END;
               vtFixC := vtFixC + 1
             END
@@ -1175,7 +1170,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         dcw := dcw + nm
       END;
       FindPtrFlds(T, 0, dcw);
-      data[dcw] := 0FFFFH; dcw := dcw + 1;
+      wa.data[dcw] := 0FFFFH; dcw := dcw + 1;
       i := i + 1
     END;
     (* interface itables: for each (record, interface), one 2-byte entry per
@@ -1185,7 +1180,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     WHILE i < itabC DO
       itabOff[i] := tdBase + dcw * 2;
       nm := itabIfc[i].nofmeth;
-      s := 0; WHILE s < nm DO data[dcw + s] := 0; s := s + 1 END;
+      s := 0; WHILE s < nm DO wa.data[dcw + s] := 0; s := s + 1 END;
       fillItab(itabIfc[i], itabRec[i], nm, dcw);
       dcw := dcw + nm;
       i := i + 1
@@ -1839,7 +1834,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
 
   (* --- assignment --- *)
   PROCEDURE StrToChar*(VAR x: Item);
-  BEGIN x.type := ORB.charType; x.a := str[x.a]
+  BEGIN x.type := ORB.charType; x.a := wa.str[x.a]
   END StrToChar;
 
   PROCEDURE Store*(VAR x, y: Item);
@@ -3188,206 +3183,6 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     OCG.gen1(OCG.STA * 32 + OCG.mDP, BANK_DP)
   END Header;
 
-  PROCEDURE NofPtrs(typ: ORB.Type): LONGINT;
-    VAR fld: ORB.Object; n: LONGINT;
-  BEGIN
-    IF (typ.form = ORB.Pointer) OR (typ.form = ORB.NilTyp) THEN n := 1
-    ELSIF typ.form = ORB.Record THEN
-      fld := typ.dsc; n := 0;
-      WHILE fld # NIL DO n := NofPtrs(fld.type) + n; fld := fld.next END
-    ELSIF typ.form = ORB.Array THEN n := NofPtrs(typ.base) * typ.len
-    ELSE n := 0
-    END;
-    RETURN n
-  END NofPtrs;
-
-  (* --- .816 writer helpers --- *)
-  PROCEDURE Write4(VAR R: Files.Rider; v: LONGINT);
-  BEGIN
-    Files.WriteByte(R, v MOD 100H);
-    Files.WriteByte(R, v DIV 100H MOD 100H);
-    Files.WriteByte(R, v DIV 10000H MOD 100H);
-    Files.WriteByte(R, v DIV 1000000H MOD 100H)
-  END Write4;
-
-  PROCEDURE FindPtrs(VAR R: Files.Rider; typ: ORB.Type; adr: LONGINT);
-    VAR fld: ORB.Object; i, s: LONGINT;
-  BEGIN
-    IF (typ.form = ORB.Pointer) OR (typ.form = ORB.NilTyp) THEN
-      Write4(R, adr)
-    ELSIF typ.form = ORB.Record THEN
-      fld := typ.dsc;
-      WHILE fld # NIL DO FindPtrs(R, fld.type, fld.val + adr); fld := fld.next END
-    ELSIF typ.form = ORB.Array THEN
-      s := typ.base.size; i := 0;
-      WHILE i < typ.len DO FindPtrs(R, typ.base, i * s + adr); i := i + 1 END
-    END
-  END FindPtrs;
-
-
-  PROCEDURE writeModule(modid: ARRAY OF CHAR; key: LONGINT; nofent: LONGINT);
-    VAR obj: ORB.Object; i, comsize, nofimps, nofptrs, size: LONGINT;
-      name: ARRAY 256 OF CHAR; F: Files.File; R: Files.Rider;
-  BEGIN
-    (* Exit: emulator calls main with JSL, return with RTL *)
-    OCG.Rtl;
-    ORGFP.EmitSubroutines; ORGFP.FixupCalls;
-    (* deferred descriptors already generated by FinalizeTDs (before Export,
-       so record T.len is written to the .smb — cross-module type tests and
-       NEW read it) *)
-
-    obj := ORB.topScope.next;
-    nofimps := 0; comsize := 4; nofptrs := 0;
-    WHILE obj # NIL DO
-      IF (obj.class = ORB.Mod) & (obj.dsc # ORB.systemScope) THEN
-        nofimps := nofimps + 1
-      ELSIF (obj.exno # 0) & (obj.class = ORB.Const) &
-            (obj.type.form = ORB.Proc) & (obj.type.nofpar = 0) &
-            (obj.type.base = ORB.noType) THEN
-        i := 0; WHILE obj.name[i] # 0X DO i := i + 1 END;
-        i := (i + 4) DIV 4 * 4;
-        comsize := comsize + i + 4
-      ELSIF obj.class = ORB.Var THEN
-        nofptrs := nofptrs + NofPtrs(obj.type)
-      END;
-      obj := obj.next
-    END;
-
-    size := varsize + strx + comsize + (OCG.Here() + nofimps + nofent + nofptrs + 1) * 4;
-
-    i := 0; WHILE modid[i] # 0X DO name[i] := modid[i]; i := i + 1 END;
-    name[i] := "."; name[i + 1] := "8"; name[i + 2] := "1"; name[i + 3] := "6";
-    name[i + 4] := 0X;
-    F := Files.New(name);
-    Files.Set(R, F, 0);
-    Files.WriteString(R, modid);
-    Write4(R, key);
-    Files.WriteByte(R, version MOD 100H);
-    Write4(R, size);
-
-    obj := ORB.topScope.next;
-    WHILE (obj # NIL) & (obj.class = ORB.Mod) DO
-      IF obj.dsc # ORB.systemScope THEN
-        Files.WriteString(R, obj(ORB.Module).orgname);
-        Write4(R, obj.val)
-      END;
-      obj := obj.next
-    END;
-    Files.WriteByte(R, 0);
-
-    Write4(R, tdx * 2);
-    i := 0;
-    WHILE i < tdx DO
-      Files.WriteByte(R, data[i] MOD 100H);
-      Files.WriteByte(R, data[i] DIV 100H MOD 100H);
-      i := i + 1
-    END;
-
-    Write4(R, varsize);
-    Write4(R, strx);
-    i := 0; WHILE i < strx DO Files.WriteByte(R, str[i] MOD 100H); i := i + 1 END;
-
-    Write4(R, OCG.Here() - CodeOrg);
-    i := 0;
-    WHILE i < OCG.Here() - CodeOrg DO
-      Files.WriteByte(R, OCG.Get(i) MOD 100H); i := i + 1
-    END;
-
-    obj := ORB.topScope.next;
-    WHILE obj # NIL DO
-      IF (obj.exno # 0) & (obj.class = ORB.Const) &
-         (obj.type.form = ORB.Proc) & (obj.type.nofpar = 0) &
-         (obj.type.base = ORB.noType) THEN
-        Files.WriteString(R, obj.name);
-        Write4(R, obj.val)
-      END;
-      obj := obj.next
-    END;
-    Files.WriteByte(R, 0);
-
-    Write4(R, nofent);
-    Write4(R, entry);
-
-    (* Build the export table indexed by exno (the loader indexes exports[]
-       by exno), merging module-level procs/vars/types with methods — which
-       live in each record's meth list, not topScope. A method's entry is its
-       CODE address (backend), so importers can reach it by mno:exno. *)
-    i := 0; WHILE i < maxEnt DO entryVal[i] := 0; i := i + 1 END;
-    obj := ORB.topScope.next;
-    WHILE obj # NIL DO
-      IF (obj.exno # 0) & (obj.exno < maxEnt) THEN
-        IF ((obj.class = ORB.Const) & (obj.type.form = ORB.Proc)) OR
-           (obj.class = ORB.Var) THEN
-          entryVal[obj.exno] := obj.val
-        ELSIF (obj.class = ORB.Const) &
-              ((obj.type.form = ORB.Array) OR (obj.type.form = ORB.Record)) THEN
-          entryVal[obj.exno] := varsize + obj.val
-        ELSIF obj.class = ORB.Typ THEN
-          IF obj.type.form = ORB.Record THEN
-            entryVal[obj.exno] := obj.type.len MOD 10000H
-          ELSIF (obj.type.form = ORB.Pointer) &
-                ((obj.type.base.typobj = NIL) OR (obj.type.base.typobj.exno = 0)) THEN
-            entryVal[obj.exno] := obj.type.base.len MOD 10000H
-          END
-        END
-      END;
-      obj := obj.next
-    END;
-    i := 0;
-    WHILE i < tdListC DO
-      obj := tdList[i].meth;
-      WHILE obj # NIL DO
-        IF (obj.exno # 0) & (obj.exno < maxEnt) THEN entryVal[obj.exno] := obj.backend END;
-        obj := obj.next
-      END;
-      i := i + 1
-    END;
-    i := 1;
-    WHILE i < nofent DO Write4(R, entryVal[i]); i := i + 1 END;
-
-    obj := ORB.topScope.next;
-    WHILE obj # NIL DO
-      IF obj.class = ORB.Var THEN FindPtrs(R, obj.type, obj.val) END;
-      obj := obj.next
-    END;
-
-    Write4(R, -1);
-    Write4(R, fixorgP);
-    Write4(R, fixorgD);
-    Write4(R, fixorgT);
-
-    Write4(R, tdFixupC);
-    i := 0;
-    WHILE i < tdFixupC DO
-      Files.WriteByte(R, tdFixupOff[i] MOD 100H);
-      Files.WriteByte(R, tdFixupOff[i] DIV 100H MOD 100H);
-      Files.WriteByte(R, tdFixupMno[i] MOD 100H);
-      Files.WriteByte(R, tdFixupMno[i] DIV 100H MOD 100H);
-      i := i + 1
-    END;
-
-    (* vtable fixups: an imported inherited method's slot, resolved by the
-       loader to (import_base + exports[exno]) - this_module_code_base so the
-       codeBase+slot dispatch lands in the base module. offset(4) mno(2) exno(2). *)
-    Write4(R, vtFixC);
-    i := 0;
-    WHILE i < vtFixC DO
-      Write4(R, vtFixOff[i]);
-      Files.WriteByte(R, vtFixMno[i] MOD 100H);
-      Files.WriteByte(R, vtFixMno[i] DIV 100H MOD 100H);
-      Files.WriteByte(R, vtFixExno[i] MOD 100H);
-      Files.WriteByte(R, vtFixExno[i] DIV 100H MOD 100H);
-      i := i + 1
-    END;
-
-    Write4(R, OCG.RelCount());
-    i := 0;
-    WHILE i < OCG.RelCount() DO Write4(R, OCG.Rel(i)); i := i + 1 END;
-
-    Write4(R, entry);
-    Files.WriteByte(R, ORD("O"));
-    Files.Register(F)
-  END writeModule;
 
   (* Emit the .816 module — unless a fixed backend buffer overflowed while
      generating code, in which case the code/reloc tables are truncated and
@@ -3395,10 +3190,18 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
      cleanly (this is the clean-abort for an over-large module; the raw
      overflow used to run past the reloc array and segfault). *)
   PROCEDURE Close*(modid: ARRAY OF CHAR; key: LONGINT; nofent: LONGINT);
+    VAR wInfo: ORGW.ModInfo;
   BEGIN
     IF OCG.Faulted() THEN
       ORS.Mark("program too large: code or relocation table overflow")
-    ELSE writeModule(modid, key, nofent)
+    ELSE
+      OCG.Rtl;   (* exit: emulator calls main with JSL, return with RTL *)
+      ORGFP.EmitSubroutines; ORGFP.FixupCalls;
+      wInfo.key := key; wInfo.nofent := nofent; wInfo.version := version;
+      wInfo.varsize := varsize; wInfo.strx := strx; wInfo.tdx := tdx; wInfo.entry := entry;
+      wInfo.fixorgP := fixorgP; wInfo.fixorgD := fixorgD; wInfo.fixorgT := fixorgT;
+      wInfo.tdListC := tdListC; wInfo.tdFixupC := tdFixupC; wInfo.vtFixC := vtFixC;
+      ORGW.WriteModule(modid, wInfo, wa, tdList)
     END
   END Close;
 

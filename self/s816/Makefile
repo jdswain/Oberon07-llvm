@@ -28,7 +28,7 @@ RT_SMB := $(RT)/Errors.smb $(RT)/Out.smb $(RT)/Files.smb
 CC     := clang
 CFLAGS := -std=c11 -Wall -Wno-unused-parameter -Wno-unused-function -g
 
-MODS := ORS ORB OCG ORGFP ORG ORP
+MODS := ORS ORB OCG ORGFP ORGW ORG ORP
 OBJS := $(MODS:%=%.o) main.o
 
 all: oc816
@@ -52,10 +52,11 @@ $(RT)/Files.smb: $(RT)/Files.Mod $(RT)/Errors.smb
 	$(OC0) -s $(RT)/Files.Mod
 
 # Stage-0 compilation. Modules depend on each other's .smb files, so the
-# order is fixed: ORS -> ORB -> OCG -> ORGFP -> ORG -> ORP. ORS imports
-# Files + Out, so the runtime .smb must exist first. ORGFP (the FP
-# subroutine library) is peeled out of ORG and imports only OCG, so it
-# builds after OCG and before ORG (which imports it).
+# order is fixed: ORS -> ORB -> OCG -> ORGFP -> ORGW -> ORG -> ORP. ORS
+# imports Files + Out, so the runtime .smb must exist first. ORGFP (the FP
+# subroutine library, imports only OCG) and ORGW (the .816 module serializer,
+# imports OCG/ORB/Files) are both peeled out of ORG and build after OCG/ORB
+# and before ORG (which imports them).
 ORS.o: ORS.Mod $(RT_SMB)
 	$(OC0) -s ORS.Mod
 ORB.o: ORB.Mod ORS.o
@@ -64,7 +65,9 @@ OCG.o: OCG.Mod
 	$(OC0) -s OCG.Mod
 ORGFP.o: ORGFP.Mod OCG.o
 	$(OC0) -s ORGFP.Mod
-ORG.o: ORG.Mod OCG.o ORGFP.o ORB.o
+ORGW.o: ORGW.Mod OCG.o ORB.o
+	$(OC0) -s ORGW.Mod
+ORG.o: ORG.Mod OCG.o ORGFP.o ORGW.o ORB.o
 	$(OC0) -s ORG.Mod
 ORP.o: ORP.Mod ORG.o
 	$(OC0) -s ORP.Mod
