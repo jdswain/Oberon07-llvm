@@ -2841,6 +2841,7 @@ static void ORP_Module(void) {
         } else {
             ORS_Mark("identifier expected");
         }
+        if (sym == ORS_large) ORS_Get(&sym);  /* MODULE m LARGE; — LLVM backend ignores the model */
         Check(ORS_semicolon, "no ;");
         level = 0;
         exno = 1;

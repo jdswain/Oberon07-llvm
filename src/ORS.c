@@ -75,6 +75,7 @@ static KeyWord keyTab[] = {
     {"INIT", ORS_init},
     {"INTERFACE", ORS_interface},
     {"IS", ORS_is},
+    {"LARGE", ORS_large},
     {"MOD", ORS_mod},
     {"MODULE", ORS_module},
     {"NIL", ORS_nil},

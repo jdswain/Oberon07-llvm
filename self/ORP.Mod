@@ -2229,9 +2229,9 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
   END Import;
 
   PROCEDURE Module;
-    VAR key: LONGINT;
+    VAR key: LONGINT; large: BOOLEAN;
   BEGIN
-    key := 0;
+    key := 0; large := FALSE;
     Out.WriteString("  compiling ");
     ORS.Get(sym);
     IF sym = ORS.module THEN
@@ -2244,6 +2244,7 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
         Out.WriteString(modid)
       ELSE ORS.Mark("identifier expected")
       END;
+      IF sym = ORS.large THEN large := TRUE; ORS.Get(sym) END;  (* MODULE m LARGE; *)
       Check(ORS.semicolon, "no ;");
       level := 0; exno := 1;
       IF sym = ORS.import THEN
@@ -2255,7 +2256,7 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
         END;
         Check(ORS.semicolon, "; missing")
       END;
-      ORG.Open(modid, VERSION);
+      ORG.Open(modid, VERSION, large);
       Declarations(dc, 0);
       ORG.SetDataSize(dc);
       WHILE sym = ORS.procedure DO

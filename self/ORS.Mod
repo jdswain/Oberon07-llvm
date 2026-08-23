@@ -33,7 +33,7 @@ MODULE ORS; (* NW 19.9.93 / 15.3.2017  Scanner in Oberon-07.
     (* appended after eot, same strategy as the C port: tested by
        equality only, never by range *)
     weak* = 71; init* = 72; override* = 73; super* = 74;
-    interface* = 75; implements* = 76;
+    interface* = 75; implements* = 76; large* = 77;
 
   TYPE Ident* = ARRAY IdLen OF CHAR;
     KwName = ARRAY 12 OF CHAR;
@@ -369,5 +369,6 @@ BEGIN k := 0;
   EnterKW(procedure, "PROCEDURE");
   EnterKW(override, "OVERRIDE");
   EnterKW(interface, "INTERFACE");
-  EnterKW(implements, "IMPLEMENTS")
+  EnterKW(implements, "IMPLEMENTS");
+  EnterKW(large, "LARGE")
 END ORS.

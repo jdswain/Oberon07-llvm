@@ -57,7 +57,7 @@ typedef enum {
        doc/DDR-008-oberon-interfaces.md). Same append-after-eof strategy as
        ORS_weak: all are tested by equality only, never by range. */
     ORS_init = 72, ORS_override = 73, ORS_super = 74,
-    ORS_interface = 75, ORS_implements = 76
+    ORS_interface = 75, ORS_implements = 76, ORS_large = 77
 } ORS_Symbol;
 
 // Type definitions

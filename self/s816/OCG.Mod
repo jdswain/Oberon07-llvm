@@ -18,15 +18,20 @@ MODULE OCG; (* 65C816 instruction encoder.
        maxReloc is sized for a near-full-bank module (reloc count tracks code
        size at roughly code/40; the largest module that fits, ORB, uses 374).
 
-       HARD LIMIT — maxCode must never exceed 65536. Branch operands and the
-       forward-branch fixup chain links (ofix/ofixl store v MOD 10000H) are
-       16-bit, so a code offset past 64K truncates: FixLink then walks garbage
-       links and the compile crawls. That is a symptom of "too big for a bank",
-       not a perf bug — at any legal cap the overflow guard fires first and the
-       module aborts instantly. *)
-    maxCode* = 65024;
+       SMALL model is capped at maxCodeSmall = 65024 (= 65536 - 512, leaving
+       the loader's per-module header/tables room in the bank): intra-module
+       calls are JSR (16-bit), so the whole module must sit in one bank. A
+       LARGE module (MODULE m LARGE) uses JSL for internal calls and may fill
+       maxCode. Its forward-branch fixup chain links are stored RELATIVE (see
+       ofixl), so they survive a >64K code image; branch DISTANCES stay <32K
+       either way (every branch is intra-procedure, well within BRL's +/-32K
+       reach). On-target the compiler will hold `code` as bank-sized chunks
+       (all access is funnelled through o/Get/Patch); today it runs on the
+       host, where a flat 128K array is fine. *)
+    maxCodeSmall = 65024;    (* SMALL-model code cap (one bank) *)
+    maxCode* = 131072;       (* code-buffer size = LARGE-model cap (2 banks) *)
     CodeOrg = 0;             (* code starts at $0000 *)
-    maxReloc* = 2048;
+    maxReloc* = 4096;
 
     (* addressing modes — same order as the C AddrMode enum *)
     mAbs* = 0; mAcc* = 1; mAbsX* = 2; mAbsY* = 3; mAbsL* = 4;
@@ -61,6 +66,7 @@ MODULE OCG; (* 65C816 instruction encoder.
        directly, so per-instruction emission stays a single call. *)
     code: ARRAY maxCode OF BYTE;
     pc: LONGINT;               (* code index = address (CodeOrg = 0) *)
+    codeLimit: LONGINT;        (* active code cap: maxCodeSmall, or ~maxCode in LARGE *)
     longa, longi: BOOLEAN;     (* 16-bit accumulator / index registers *)
     dpage, pbreg: LONGINT;
     reloc: ARRAY maxReloc OF LONGINT;
@@ -77,7 +83,7 @@ MODULE OCG; (* 65C816 instruction encoder.
      offsets remain consistent; the fault makes Close refuse to emit. *)
   PROCEDURE o(b: LONGINT);
   BEGIN
-    IF pc - CodeOrg < maxCode THEN code[pc - CodeOrg] := b MOD 100H
+    IF pc - CodeOrg < codeLimit THEN code[pc - CodeOrg] := b MOD 100H
     ELSE fault := TRUE
     END;
     pc := pc + 1
@@ -122,8 +128,16 @@ MODULE OCG; (* 65C816 instruction encoder.
     END
   END ofix;
 
-  PROCEDURE ofixl(op, v: LONGINT);   (* forward BRL fixup chain (16-bit) *)
-  BEGIN ow(op, v MOD 10000H)
+  PROCEDURE ofixl(op, v: LONGINT);   (* forward BRL fixup chain *)
+    VAR ch: LONGINT;
+  BEGIN
+    (* Store the link RELATIVE to this operand (v = previous site's operand
+       position, this operand is at pc+1). Intra-procedure, so |ch| < 32K fits
+       16 bits even when the absolute positions exceed 64K. v = 0 is the
+       empty/end sentinel. *)
+    IF v = 0 THEN ow(op, 0)
+    ELSE ch := v - (pc + 1); ow(op, ch MOD 10000H)
+    END
   END ofixl;
 
   PROCEDURE omove(op, src, dst: LONGINT);
@@ -651,6 +665,11 @@ MODULE OCG; (* 65C816 instruction encoder.
   PROCEDURE SetLongI*(b: BOOLEAN);    BEGIN longi := b END SetLongI;
   PROCEDURE SetDPage*(d: LONGINT);    BEGIN dpage := d END SetDPage;
   PROCEDURE SetPBReg*(p: LONGINT);    BEGIN pbreg := p END SetPBReg;
+  (* Select the code cap: SMALL (one bank, JSR internal calls) or LARGE
+     (fill the buffer, JSL internal calls). ORG.Open calls this per module. *)
+  PROCEDURE SetLarge*(large: BOOLEAN);
+  BEGIN IF large THEN codeLimit := maxCode - 512 ELSE codeLimit := maxCodeSmall END
+  END SetLarge;
   PROCEDURE RelCount*(): INTEGER;     BEGIN RETURN relocC END RelCount;
   PROCEDURE Rel*(i: INTEGER): LONGINT; BEGIN RETURN reloc[i] END Rel;
   PROCEDURE AddRel*(p: LONGINT);
@@ -666,10 +685,12 @@ MODULE OCG; (* 65C816 instruction encoder.
   PROCEDURE Init*;
   BEGIN
     pc := CodeOrg; longa := TRUE; longi := TRUE;
-    dpage := 0; pbreg := 0; relocC := 0; fault := FALSE; peepReg := -1
+    dpage := 0; pbreg := 0; relocC := 0; fault := FALSE; peepReg := -1;
+    codeLimit := maxCodeSmall
   END Init;
 
 BEGIN
   pc := CodeOrg; longa := TRUE; longi := TRUE;
-  dpage := 0; pbreg := 0; relocC := 0; fault := FALSE; peepReg := -1
+  dpage := 0; pbreg := 0; relocC := 0; fault := FALSE; peepReg := -1;
+  codeLimit := maxCodeSmall
 END OCG.

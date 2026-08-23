@@ -74,6 +74,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     tdx, strx, entry, RH, frame: LONGINT;
     fixorgP, fixorgD, fixorgT: LONGINT;
     check: BOOLEAN;
+    largeMod: BOOLEAN;   (* MODULE m LARGE: far (JSL/RTL) internal calls, >64K code *)
     version: INTEGER;
     relmap: ARRAY 6 OF INTEGER;
     wa: ORGW.ModArrays;               (* module-image scratch: str/data/tdFixup*/vtFix* *)
@@ -340,42 +341,52 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   END FixOne;
 
   PROCEDURE FixLink*(L: LONGINT);
-    VAR L1, ci: LONGINT;
+    VAR L1, ci, raw: LONGINT;
   BEGIN
     (* ~OCG.Faulted() backstops a chain corrupted by a code-buffer overflow
        whose garbage links happen to stay in range (Get already terminates
-       out-of-range walks by returning 0). *)
+       out-of-range walks by returning 0). Links are RELATIVE (see OCG.ofixl):
+       the previous site is L + signext16(link); a raw link of 0 ends the chain. *)
     WHILE (L # 0) & ~OCG.Faulted() DO
       ci := L - CodeOrg;
-      L1 := OCG.Get(ci) + OCG.Get(ci + 1) * 100H;
+      raw := OCG.Get(ci) + OCG.Get(ci + 1) * 100H;
+      IF raw >= 8000H THEN raw := raw - 10000H END;
+      IF raw = 0 THEN L1 := 0 ELSE L1 := L + raw END;
       fix(L, OCG.Here());
       L := L1
     END
   END FixLink;
 
   PROCEDURE FixLinkWith(L0, dst: LONGINT);
-    VAR L1, ci: LONGINT;
+    VAR L1, ci, raw: LONGINT;
   BEGIN
     WHILE L0 # 0 DO
       ci := L0 - CodeOrg;
-      L1 := OCG.Get(ci) + OCG.Get(ci + 1) * 100H;
+      raw := OCG.Get(ci) + OCG.Get(ci + 1) * 100H;
+      IF raw >= 8000H THEN raw := raw - 10000H END;
+      IF raw = 0 THEN L1 := 0 ELSE L1 := L0 + raw END;
       fix(L0, dst);
       L0 := L1
     END
   END FixLinkWith;
 
   PROCEDURE merged(L0, L1: LONGINT): LONGINT;
-    VAR L2, L3, ci: LONGINT;
+    VAR L2, L3, ci, raw, rel: LONGINT;
   BEGIN
-    ci := 0;
+    ci := 0; L2 := 0;
     IF L0 # 0 THEN
       L3 := L0;
       REPEAT
         L2 := L3; ci := L2 - CodeOrg;
-        L3 := OCG.Get(ci) + OCG.Get(ci + 1) * 100H
+        raw := OCG.Get(ci) + OCG.Get(ci + 1) * 100H;
+        IF raw >= 8000H THEN raw := raw - 10000H END;
+        IF raw = 0 THEN L3 := 0 ELSE L3 := L2 + raw END
       UNTIL L3 = 0;
-      OCG.Patch(ci, L1);
-      OCG.Patch(ci + 1, L1 DIV 100H);
+      (* point L0's tail (operand at ci, position L2) at chain L1, RELATIVE;
+         L1 = 0 keeps the end sentinel *)
+      IF L1 = 0 THEN rel := 0 ELSE rel := (L1 - L2) MOD 10000H END;
+      OCG.Patch(ci, rel MOD 100H);
+      OCG.Patch(ci + 1, rel DIV 100H MOD 100H);
       L1 := L0
     END;
     RETURN L1
@@ -2413,8 +2424,8 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         mno := -x.r; exno := x.a;
         encoded := mno * 10000H + (exno MOD 10000H);
         OCG.gen1(OCG.JSL * 32 + OCG.mAbsL, encoded)
-      ELSIF x.b = 1 THEN
-        OCG.gen1(OCG.JSL * 32 + OCG.mAbsL, x.a)
+      ELSIF (x.b = 1) OR largeMod THEN
+        OCG.gen1(OCG.JSL * 32 + OCG.mAbsL, x.a)   (* far intra-module call *)
       ELSE
         OCG.gen1(OCG.JSR * 32 + OCG.mAbs, x.a)
       END
@@ -2602,14 +2613,18 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         OCG.gen1(OCG.ADC * 32 + OCG.mImm, size);
         OCG.Tcs
       END;
+      (* SB save/restore is only for genuinely cross-module-reachable procs
+         (curExpo); an intra-module large-model proc runs with the caller's
+         SB (same module) so it skips the dance. The far RETURN convention
+         (RTL) is separate: needed whenever the proc is reached by a long
+         call — every proc in a LARGE module is. *)
       IF curExpo THEN
         OCG.Pla;
         OCG.gen1(OCG.STA * 32 + OCG.mDP, BANK_DP);
         OCG.Pla;
-        OCG.gen1(OCG.STA * 32 + OCG.mDP, SB_DP);
-        OCG.Rtl
-      ELSE OCG.Rts
-      END
+        OCG.gen1(OCG.STA * 32 + OCG.mDP, SB_DP)
+      END;
+      IF curExpo OR largeMod THEN OCG.Rtl ELSE OCG.Rts END
     ELSE
       IF size > 0 THEN
         OCG.Clc;
@@ -3149,11 +3164,11 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   END Condition;
 
   (* --- module management --- *)
-  PROCEDURE Open*(modid: ARRAY OF CHAR; v: INTEGER);
+  PROCEDURE Open*(modid: ARRAY OF CHAR; v: INTEGER; large: BOOLEAN);
     VAR i: INTEGER;
   BEGIN
-    curModid := modid;
-    OCG.Init; OCG.SetPc(CodeOrg);
+    curModid := modid; largeMod := large;
+    OCG.Init; OCG.SetLarge(large); OCG.SetPc(CodeOrg);
     tdx := 0; strx := 0; RH := 0; forDepth := 0;
     fixorgP := 0; fixorgD := 0; fixorgT := 0;
     tdFixupC := 0; tdListC := 0; tdRefC := 0; vtFixC := 0;
