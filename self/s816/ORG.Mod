@@ -74,6 +74,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     tdx, strx, entry, RH, frame: LONGINT;
     fixorgP, fixorgD, fixorgT: LONGINT;
     check: BOOLEAN;
+    largeMod: BOOLEAN;   (* MODULE m LARGE: far (JSL/RTL) internal calls, >64K code *)
     version: INTEGER;
     relmap: ARRAY 6 OF INTEGER;
     wa: ORGW.ModArrays;               (* module-image scratch: str/data/tdFixup*/vtFix* *)
@@ -3149,10 +3150,10 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   END Condition;
 
   (* --- module management --- *)
-  PROCEDURE Open*(modid: ARRAY OF CHAR; v: INTEGER);
+  PROCEDURE Open*(modid: ARRAY OF CHAR; v: INTEGER; large: BOOLEAN);
     VAR i: INTEGER;
   BEGIN
-    curModid := modid;
+    curModid := modid; largeMod := large;
     OCG.Init; OCG.SetPc(CodeOrg);
     tdx := 0; strx := 0; RH := 0; forDepth := 0;
     fixorgP := 0; fixorgD := 0; fixorgT := 0;

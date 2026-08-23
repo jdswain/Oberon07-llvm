@@ -277,8 +277,8 @@ MODULE ORG; (* Interface to the LLVM code generator (DDR C-bridge module).
   BEGIN END Condition;
 
   (* --- module management --- *)
-  PROCEDURE Open*(modid: ARRAY OF CHAR; v: INTEGER);
-  BEGIN END Open;
+  PROCEDURE Open*(modid: ARRAY OF CHAR; v: INTEGER; large: BOOLEAN);
+  BEGIN END Open;  (* large ignored: LLVM/host target has no bank limit *)
   PROCEDURE SetDataSize*(dc: LONGINT);
   BEGIN END SetDataSize;
   PROCEDURE Header*;
