@@ -72,8 +72,6 @@ MODULE OCG; (* 65C816 instruction encoder.
     reloc: ARRAY maxReloc OF LONGINT;
     relocC: INTEGER;
     fault: BOOLEAN;            (* a fixed buffer (code/reloc) overflowed *)
-    peepReg: LONGINT;          (* DP reg whose value A currently holds (STA), or -1;
-                                  lets Gen drop a redundant reload. See Gen. *)
 
   (* --- byte emission --- *)
 
@@ -145,34 +143,34 @@ MODULE OCG; (* 65C816 instruction encoder.
   END omove;
 
   PROCEDURE Byte*(b: LONGINT);
-  BEGIN o(b); peepReg := -1
+  BEGIN o(b)
   END Byte;
 
   PROCEDURE Word*(w: LONGINT);
-  BEGIN o(w); o(w DIV 100H); peepReg := -1
+  BEGIN o(w); o(w DIV 100H)
   END Word;
 
   PROCEDURE Long*(l: LONGINT);
-  BEGIN o(l); o(l DIV 100H); o(l DIV 10000H); o(l DIV 1000000H); peepReg := -1
+  BEGIN o(l); o(l DIV 100H); o(l DIV 10000H); o(l DIV 1000000H)
   END Long;
 
   (* Narrow 0-arg emitters for implied 1-byte instructions. A full
      Gen(op, mImpl, 0, 0) call compiles to ~23 bytes at the call site (4
      constant args + JSR); one of these is ~3. ORG has 191 implied sites. *)
-  PROCEDURE Clc*; BEGIN o(18H); peepReg := -1 END Clc;
-  PROCEDURE Sec*; BEGIN o(38H); peepReg := -1 END Sec;
-  PROCEDURE Rts*; BEGIN o(60H); peepReg := -1 END Rts;
-  PROCEDURE Rtl*; BEGIN o(6BH); peepReg := -1 END Rtl;
-  PROCEDURE Pha*; BEGIN o(48H); peepReg := -1 END Pha;
-  PROCEDURE Pla*; BEGIN o(68H); peepReg := -1 END Pla;
-  PROCEDURE Dex*; BEGIN o(0CAH); peepReg := -1 END Dex;
-  PROCEDURE Phk*; BEGIN o(4BH); peepReg := -1 END Phk;
-  PROCEDURE Iny*; BEGIN o(0C8H); peepReg := -1 END Iny;
-  PROCEDURE Xba*; BEGIN o(0EBH); peepReg := -1 END Xba;
-  PROCEDURE Tsc*; BEGIN o(3BH); peepReg := -1 END Tsc;
-  PROCEDURE Tcs*; BEGIN o(1BH); peepReg := -1 END Tcs;
-  PROCEDURE Tax*; BEGIN o(0AAH); peepReg := -1 END Tax;
-  PROCEDURE Rti*; BEGIN o(40H); peepReg := -1 END Rti;
+  PROCEDURE Clc*; BEGIN o(18H) END Clc;
+  PROCEDURE Sec*; BEGIN o(38H) END Sec;
+  PROCEDURE Rts*; BEGIN o(60H) END Rts;
+  PROCEDURE Rtl*; BEGIN o(6BH) END Rtl;
+  PROCEDURE Pha*; BEGIN o(48H) END Pha;
+  PROCEDURE Pla*; BEGIN o(68H) END Pla;
+  PROCEDURE Dex*; BEGIN o(0CAH) END Dex;
+  PROCEDURE Phk*; BEGIN o(4BH) END Phk;
+  PROCEDURE Iny*; BEGIN o(0C8H) END Iny;
+  PROCEDURE Xba*; BEGIN o(0EBH) END Xba;
+  PROCEDURE Tsc*; BEGIN o(3BH) END Tsc;
+  PROCEDURE Tcs*; BEGIN o(1BH) END Tcs;
+  PROCEDURE Tax*; BEGIN o(0AAH) END Tax;
+  PROCEDURE Rti*; BEGIN o(40H) END Rti;
 
   (* --- mode optimisations (codegen_gen) --- *)
 
@@ -601,7 +599,6 @@ MODULE OCG; (* 65C816 instruction encoder.
 
   (* codegen_gen: apply mode optimisations, then emit. *)
   PROCEDURE Gen*(op, mode, v1, v2: LONGINT);
-    VAR wasSta: LONGINT;
   BEGIN
     IF mode = mAbs THEN
       IF isDP(v1) THEN mode := mDP END
@@ -612,21 +609,7 @@ MODULE OCG; (* 65C816 instruction encoder.
     ELSIF mode = mAbsInd THEN
       IF isLongData(v1) THEN mode := mAbsIndL END
     END;
-    (* Peephole: drop a reload of a DP register whose value A still holds.
-       A producing op ends `STA <reg>` (A = the result); a consumer then
-       starts `LDA <reg>` — but STA does not disturb A, so the LDA is
-       redundant. peepReg is the reg just STA'd; it is cleared by any other
-       emission, by Here (a control-flow boundary/label), and by width
-       changes (REP/SEP go through Gen), so a match means A is provably still
-       that value. N/Z are preserved because the producing op set them from
-       the same value; carry/overflow after a plain load are never consumed. *)
-    wasSta := peepReg; peepReg := -1;
-    IF (op = LDA) & (mode = mDP) & (v1 = wasSta) THEN
-      (* redundant reload — skip *)
-    ELSE
-      gen(op, mode, v1, v2);
-      IF (op = STA) & (mode = mDP) THEN peepReg := v1 END
-    END
+    gen(op, mode, v1, v2)
   END Gen;
 
   (* Arity-narrowed entry points so ORG needn't pass unused operands: the
@@ -643,7 +626,7 @@ MODULE OCG; (* 65C816 instruction encoder.
   END gen2;
 
   (* --- accessors for ORG --- *)
-  PROCEDURE Here*(): LONGINT;         BEGIN peepReg := -1; RETURN pc END Here;
+  PROCEDURE Here*(): LONGINT;         BEGIN RETURN pc END Here;
   PROCEDURE SetPc*(p: LONGINT);       BEGIN pc := p END SetPc;
   (* Bounds-checked: after a code-buffer overflow the fixup chains embedded
      in `code` are truncated, so a chain walk could read/patch out of range.
@@ -685,12 +668,12 @@ MODULE OCG; (* 65C816 instruction encoder.
   PROCEDURE Init*;
   BEGIN
     pc := CodeOrg; longa := TRUE; longi := TRUE;
-    dpage := 0; pbreg := 0; relocC := 0; fault := FALSE; peepReg := -1;
+    dpage := 0; pbreg := 0; relocC := 0; fault := FALSE;
     codeLimit := maxCodeSmall
   END Init;
 
 BEGIN
   pc := CodeOrg; longa := TRUE; longi := TRUE;
-  dpage := 0; pbreg := 0; relocC := 0; fault := FALSE; peepReg := -1;
+  dpage := 0; pbreg := 0; relocC := 0; fault := FALSE;
   codeLimit := maxCodeSmall
 END OCG.
