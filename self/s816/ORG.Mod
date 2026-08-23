@@ -2414,8 +2414,8 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         mno := -x.r; exno := x.a;
         encoded := mno * 10000H + (exno MOD 10000H);
         OCG.gen1(OCG.JSL * 32 + OCG.mAbsL, encoded)
-      ELSIF x.b = 1 THEN
-        OCG.gen1(OCG.JSL * 32 + OCG.mAbsL, x.a)
+      ELSIF (x.b = 1) OR largeMod THEN
+        OCG.gen1(OCG.JSL * 32 + OCG.mAbsL, x.a)   (* far intra-module call *)
       ELSE
         OCG.gen1(OCG.JSR * 32 + OCG.mAbs, x.a)
       END
@@ -2603,14 +2603,18 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         OCG.gen1(OCG.ADC * 32 + OCG.mImm, size);
         OCG.Tcs
       END;
+      (* SB save/restore is only for genuinely cross-module-reachable procs
+         (curExpo); an intra-module large-model proc runs with the caller's
+         SB (same module) so it skips the dance. The far RETURN convention
+         (RTL) is separate: needed whenever the proc is reached by a long
+         call — every proc in a LARGE module is. *)
       IF curExpo THEN
         OCG.Pla;
         OCG.gen1(OCG.STA * 32 + OCG.mDP, BANK_DP);
         OCG.Pla;
-        OCG.gen1(OCG.STA * 32 + OCG.mDP, SB_DP);
-        OCG.Rtl
-      ELSE OCG.Rts
-      END
+        OCG.gen1(OCG.STA * 32 + OCG.mDP, SB_DP)
+      END;
+      IF curExpo OR largeMod THEN OCG.Rtl ELSE OCG.Rts END
     ELSE
       IF size > 0 THEN
         OCG.Clc;
