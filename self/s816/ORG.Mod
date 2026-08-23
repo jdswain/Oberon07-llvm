@@ -341,42 +341,52 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   END FixOne;
 
   PROCEDURE FixLink*(L: LONGINT);
-    VAR L1, ci: LONGINT;
+    VAR L1, ci, raw: LONGINT;
   BEGIN
     (* ~OCG.Faulted() backstops a chain corrupted by a code-buffer overflow
        whose garbage links happen to stay in range (Get already terminates
-       out-of-range walks by returning 0). *)
+       out-of-range walks by returning 0). Links are RELATIVE (see OCG.ofixl):
+       the previous site is L + signext16(link); a raw link of 0 ends the chain. *)
     WHILE (L # 0) & ~OCG.Faulted() DO
       ci := L - CodeOrg;
-      L1 := OCG.Get(ci) + OCG.Get(ci + 1) * 100H;
+      raw := OCG.Get(ci) + OCG.Get(ci + 1) * 100H;
+      IF raw >= 8000H THEN raw := raw - 10000H END;
+      IF raw = 0 THEN L1 := 0 ELSE L1 := L + raw END;
       fix(L, OCG.Here());
       L := L1
     END
   END FixLink;
 
   PROCEDURE FixLinkWith(L0, dst: LONGINT);
-    VAR L1, ci: LONGINT;
+    VAR L1, ci, raw: LONGINT;
   BEGIN
     WHILE L0 # 0 DO
       ci := L0 - CodeOrg;
-      L1 := OCG.Get(ci) + OCG.Get(ci + 1) * 100H;
+      raw := OCG.Get(ci) + OCG.Get(ci + 1) * 100H;
+      IF raw >= 8000H THEN raw := raw - 10000H END;
+      IF raw = 0 THEN L1 := 0 ELSE L1 := L0 + raw END;
       fix(L0, dst);
       L0 := L1
     END
   END FixLinkWith;
 
   PROCEDURE merged(L0, L1: LONGINT): LONGINT;
-    VAR L2, L3, ci: LONGINT;
+    VAR L2, L3, ci, raw, rel: LONGINT;
   BEGIN
-    ci := 0;
+    ci := 0; L2 := 0;
     IF L0 # 0 THEN
       L3 := L0;
       REPEAT
         L2 := L3; ci := L2 - CodeOrg;
-        L3 := OCG.Get(ci) + OCG.Get(ci + 1) * 100H
+        raw := OCG.Get(ci) + OCG.Get(ci + 1) * 100H;
+        IF raw >= 8000H THEN raw := raw - 10000H END;
+        IF raw = 0 THEN L3 := 0 ELSE L3 := L2 + raw END
       UNTIL L3 = 0;
-      OCG.Patch(ci, L1);
-      OCG.Patch(ci + 1, L1 DIV 100H);
+      (* point L0's tail (operand at ci, position L2) at chain L1, RELATIVE;
+         L1 = 0 keeps the end sentinel *)
+      IF L1 = 0 THEN rel := 0 ELSE rel := (L1 - L2) MOD 10000H END;
+      OCG.Patch(ci, rel MOD 100H);
+      OCG.Patch(ci + 1, rel DIV 100H MOD 100H);
       L1 := L0
     END;
     RETURN L1
@@ -3158,7 +3168,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     VAR i: INTEGER;
   BEGIN
     curModid := modid; largeMod := large;
-    OCG.Init; OCG.SetPc(CodeOrg);
+    OCG.Init; OCG.SetLarge(large); OCG.SetPc(CodeOrg);
     tdx := 0; strx := 0; RH := 0; forDepth := 0;
     fixorgP := 0; fixorgD := 0; fixorgT := 0;
     tdFixupC := 0; tdListC := 0; tdRefC := 0; vtFixC := 0;
