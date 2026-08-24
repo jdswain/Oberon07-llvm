@@ -2977,35 +2977,79 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     FixLink(x.b)
   END Assert;
 
-  PROCEDURE New*(VAR x: Item);
-    VAR baseType: ORB.Type; y, z: Item; sb: LONGINT;
+  (* Emit the type-tag pointer {TD offset, bank 0} into the two-word reg 'tag'. *)
+  PROCEDURE emitTag(baseType: ORB.Type; tag: LONGINT);
+    VAR sb: LONGINT;
   BEGIN
-    baseType := x.type.base; y := x;
     Set16(TRUE, TRUE);
     sb := GetSB(-baseType.mno);
     OCG.gen1(OCG.LDA * 32 + OCG.mDP, sb);
     OCG.Clc;
     emitTDLen(baseType);
-    OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH));
-    OCG.gen1(OCG.STZ * 32 + OCG.mDP, RegAddr(RH + 1));
-    incR; incR;
-    OCG.gen1(OCG.LDA * 32 + OCG.mImm, baseType.size + 4);
-    OCG.gen1(OCG.BRK * 32 + OCG.mImm, 10);
-    OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH));
-    OCG.gen1(OCG.STX * 32 + OCG.mDP, RegAddr(RH + 1));
-    OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(RH - 2));
-    OCG.gen1(OCG.STA * 32 + OCG.mDPIndL, RegAddr(RH));
-    OCG.gen1(OCG.LDY * 32 + OCG.mImm, 2);
-    OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(RH - 1));
-    OCG.gen1(OCG.STA * 32 + OCG.mDPIndLY, RegAddr(RH));
-    OCG.Clc;
-    OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(RH));
-    OCG.gen1(OCG.ADC * 32 + OCG.mImm, 4);
-    OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH));
-    z.r := RH; z.mode := Reg; z.type := y.type;
-    incR; incR;
-    Store(y, z);
-    RH := RH - 2
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(tag));
+    OCG.gen1(OCG.STZ * 32 + OCG.mDP, RegAddr(tag + 1))
+  END emitTag;
+
+  PROCEDURE New*(VAR x: Item);
+    VAR baseType: ORB.Type; y, z, px, argSz, argTd: Item;
+        allocObj: ORB.Object; tagReg, objm4Reg, rx: LONGINT;
+  BEGIN
+    baseType := x.type.base; y := x;
+    allocObj := ORB.FindImport("HeapManager", "Alloc");
+    IF allocObj # NIL THEN
+      (* opt-in path: obj := HeapManager.Alloc(recSize, 0); then write the type
+         tag at [obj-4] (the [obj-4] contract) and store obj into the pointer *)
+      MakeItem(px, allocObj, 0);
+      PrepCall(px, rx);
+      MakeConstItem(argSz, ORB.intType, baseType.size); ValueParam(argSz, ORB.longType);
+      MakeConstItem(argTd, ORB.intType, 0);             ValueParam(argTd, ORB.longType);
+      Call(px, rx);                       (* px := obj (Reg, two words) *)
+      Set16(TRUE, TRUE);
+      tagReg := RH; emitTag(baseType, tagReg); incR; incR;
+      objm4Reg := RH;                     (* objm4 := obj - 4 *)
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(px.r));
+      OCG.Sec; OCG.gen1(OCG.SBC * 32 + OCG.mImm, 4);
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(objm4Reg));
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(px.r + 1));
+      OCG.gen1(OCG.SBC * 32 + OCG.mImm, 0);
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(objm4Reg + 1));
+      incR; incR;
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(tagReg));       (* [objm4] := tag *)
+      OCG.gen1(OCG.STA * 32 + OCG.mDPIndL, RegAddr(objm4Reg));
+      OCG.gen1(OCG.LDY * 32 + OCG.mImm, 2);
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(tagReg + 1));
+      OCG.gen1(OCG.STA * 32 + OCG.mDPIndLY, RegAddr(objm4Reg));
+      RH := tagReg;                       (* free the two temp pairs *)
+      z := px; z.type := y.type; Store(y, z)
+    ELSE
+      (* default: BRK #10 syscall (em16 heap). block = size+4, tag at block[0],
+         obj = block+4. *)
+      Set16(TRUE, TRUE);
+      tagReg := GetSB(-baseType.mno);
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, tagReg);
+      OCG.Clc;
+      emitTDLen(baseType);
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH));
+      OCG.gen1(OCG.STZ * 32 + OCG.mDP, RegAddr(RH + 1));
+      incR; incR;
+      OCG.gen1(OCG.LDA * 32 + OCG.mImm, baseType.size + 4);
+      OCG.gen1(OCG.BRK * 32 + OCG.mImm, 10);
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH));
+      OCG.gen1(OCG.STX * 32 + OCG.mDP, RegAddr(RH + 1));
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(RH - 2));
+      OCG.gen1(OCG.STA * 32 + OCG.mDPIndL, RegAddr(RH));
+      OCG.gen1(OCG.LDY * 32 + OCG.mImm, 2);
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(RH - 1));
+      OCG.gen1(OCG.STA * 32 + OCG.mDPIndLY, RegAddr(RH));
+      OCG.Clc;
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(RH));
+      OCG.gen1(OCG.ADC * 32 + OCG.mImm, 4);
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH));
+      z.r := RH; z.mode := Reg; z.type := y.type;
+      incR; incR;
+      Store(y, z);
+      RH := RH - 2
+    END
   END New;
 
   PROCEDURE Pack*(VAR x, y: Item);

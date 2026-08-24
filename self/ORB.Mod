@@ -145,6 +145,23 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
     RETURN obj
   END thisimport;
 
+  (* Look up an exported object of an already-imported module by name; NIL if
+     the module was not imported or has no such export. Lets a backend emit an
+     implicit runtime call (e.g. NEW -> HeapManager.Alloc) only for modules that
+     opt in by importing the runtime module. *)
+  PROCEDURE FindImport*(modName, expName: ARRAY OF CHAR): Object;
+    VAR m, obj: Object;
+  BEGIN
+    m := topScope.next;
+    WHILE (m # NIL) & ((m.class # Mod) OR (m.name # modName)) DO m := m.next END;
+    IF m # NIL THEN
+      obj := m.dsc;
+      WHILE (obj # NIL) & (obj.name # expName) DO obj := obj.next END
+    ELSE obj := NIL
+    END;
+    RETURN obj
+  END FindImport;
+
   PROCEDURE thisfield*(rec: Type): Object;
     VAR fld: Object;
   BEGIN fld := rec.dsc;
