@@ -683,6 +683,20 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     END
   END cvt;
 
+  (* When one operand of a binary op is LONGINT and the other is an integer
+     CONSTANT, retype the constant to LONGINT so the op takes its two-word path
+     and the result carries LONGINT type. Without this, e.g. "12 + longvar"
+     (const on the left) would keep INTEGER type on the result and leak/corrupt
+     downstream. Constants fold by value, so retyping is free. *)
+  PROCEDURE promoteConst(VAR x, y: Item);
+  BEGIN
+    IF IsLong(x.type) & (y.mode = ORB.Const) & (y.type # NIL)
+       & (y.type.form = ORB.Int) & ~IsLong(y.type) THEN y.type := ORB.longType
+    ELSIF IsLong(y.type) & (x.mode = ORB.Const) & (x.type # NIL)
+       & (x.type.form = ORB.Int) & ~IsLong(x.type) THEN x.type := ORB.longType
+    END
+  END promoteConst;
+
   PROCEDURE loadAdr(VAR x: Item);
     VAR sb: LONGINT;
   BEGIN
@@ -1463,6 +1477,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   PROCEDURE AddOp*(op: LONGINT; VAR x, y: Item);
     VAR destR: LONGINT;
   BEGIN
+    promoteConst(x, y);
     IF op = ORS.plus THEN
       IF (x.mode = ORB.Const) & (y.mode = ORB.Const) THEN x.a := x.a + y.a
       ELSIF x.mode = ORB.Const THEN
@@ -1591,6 +1606,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   PROCEDURE MulOp*(VAR x, y: Item);
     VAR e, loopTop: LONGINT;
   BEGIN
+    promoteConst(x, y);
     IF (x.mode = ORB.Const) & (y.mode = ORB.Const) THEN x.a := x.a * y.a
     ELSIF (y.mode = ORB.Const) & (y.a >= 2) & (log2(y.a, e) = 1) THEN
       IF IsLong(x.type) THEN load(x); longAsl(x.r, e)
@@ -1646,6 +1662,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   PROCEDURE DivOp*(op: LONGINT; VAR x, y: Item);
     VAR e, i, divisorReg, quotientReg: LONGINT;
   BEGIN
+    promoteConst(x, y);
     IF op = ORS.div THEN
       IF (x.mode = ORB.Const) & (y.mode = ORB.Const) THEN
         IF y.a > 0 THEN x.a := x.a DIV y.a ELSE ORS.Mark("bad divisor") END
@@ -1897,7 +1914,8 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   PROCEDURE IntRelation*(op: INTEGER; VAR x, y: Item);
     VAR isPointer, use8, useSigned, signedCmp: BOOLEAN;
   BEGIN
-    isPointer := (x.type.form = ORB.Pointer) OR (x.type.form = ORB.NilTyp) OR (x.type.form = ORB.Proc);
+    promoteConst(x, y);
+    isPointer :=(x.type.form = ORB.Pointer) OR (x.type.form = ORB.NilTyp) OR (x.type.form = ORB.Proc);
     use8 := ~isPointer & ((x.type.form = ORB.Char) OR (x.type.form = ORB.Byte) OR (x.type.form = ORB.Bool));
     useSigned := ~isPointer & ~use8 & (x.type.form = ORB.Int);
     IF isPointer THEN
