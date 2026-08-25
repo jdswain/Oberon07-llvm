@@ -150,10 +150,16 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
      implicit runtime call (e.g. NEW -> HeapManager.Alloc) only for modules that
      opt in by importing the runtime module. *)
   PROCEDURE FindImport*(modName, expName: ARRAY OF CHAR): Object;
-    VAR m, obj: Object;
+    VAR s, m, obj: Object;
   BEGIN
-    m := topScope.next;
-    WHILE (m # NIL) & ((m.class # Mod) OR (m.name # modName)) DO m := m.next END;
+    (* modules live in the module scope, which is an ENCLOSING scope when this
+       runs during procedure codegen — walk every scope level (like thisObj). *)
+    s := topScope; m := NIL;
+    WHILE (s # NIL) & (m = NIL) DO
+      m := s.next;
+      WHILE (m # NIL) & ((m.class # Mod) OR (m.name # modName)) DO m := m.next END;
+      s := s.dsc
+    END;
     IF m # NIL THEN
       obj := m.dsc;
       WHILE (obj # NIL) & (obj.name # expName) DO obj := obj.next END
