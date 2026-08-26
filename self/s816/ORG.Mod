@@ -1641,22 +1641,34 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     END
   END MulOp;
 
+  (* Unsigned 16-bit division. Restoring binary long division (shift-subtract),
+     16 iterations — O(1) in the operand values, not O(quotient) as the old
+     repeated-subtraction loop was (that made e.g. addr DIV 1 loop 'addr' times,
+     which looked like a hang in Files/Modules cluster/sector math).
+     Contract unchanged: on exit quotientReg = dividend DIV divisor,
+     dividendReg = dividend MOD divisor. Uses X as the bit counter (a fresh
+     scratch here, as elsewhere in codegen). *)
   PROCEDURE genDivLoop(dividendReg, divisorReg, quotientReg: LONGINT);
     VAR loopTop: LONGINT;
   BEGIN
     Set16(TRUE, TRUE);
-    OCG.gen1(OCG.LDA * 32 + OCG.mImm, 0);
-    OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(quotientReg));
-    loopTop := OCG.Here();
+    (* quotientReg := dividend (the shifting accumulator; its bits vacate at the
+       bottom to hold quotient bits); dividendReg := 0 (remainder accumulator) *)
     OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(dividendReg));
-    OCG.gen1(OCG.CMP * 32 + OCG.mDP, RegAddr(divisorReg));
-    OCG.gen1(OCG.BCC * 32 + OCG.mPCR, OCG.Here() + 2 + 11);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(quotientReg));
+    OCG.gen1(OCG.STZ * 32 + OCG.mDP, RegAddr(dividendReg));
+    OCG.gen1(OCG.LDX * 32 + OCG.mImm, 16);
+    loopTop := OCG.Here();
+    OCG.gen1(OCG.ASL * 32 + OCG.mDP, RegAddr(quotientReg));  (* MSB -> C *)
+    OCG.gen1(OCG.ROL * 32 + OCG.mDP, RegAddr(dividendReg));  (* rem = rem<<1 | bit *)
     OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(dividendReg));
     OCG.Sec;
-    OCG.gen1(OCG.SBC * 32 + OCG.mDP, RegAddr(divisorReg));
-    OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(dividendReg));
-    OCG.gen1(OCG.INC * 32 + OCG.mDP, RegAddr(quotientReg));
-    OCG.gen1(OCG.BRA * 32 + OCG.mPCR, loopTop)
+    OCG.gen1(OCG.SBC * 32 + OCG.mDP, RegAddr(divisorReg));   (* trial rem - divisor *)
+    OCG.gen1(OCG.BCC * 32 + OCG.mPCR, OCG.Here() + 2 + 4);   (* rem<divisor: skip commit *)
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(dividendReg));  (* commit rem -= divisor *)
+    OCG.gen1(OCG.INC * 32 + OCG.mDP, RegAddr(quotientReg));  (* quotient bit := 1 *)
+    OCG.Dex;
+    OCG.gen1(OCG.BNE * 32 + OCG.mPCR, loopTop)
   END genDivLoop;
 
   PROCEDURE DivOp*(op: LONGINT; VAR x, y: Item);
