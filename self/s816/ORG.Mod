@@ -671,8 +671,13 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       IF toLong & ~IsLong(x.type) THEN
         IF x.mode = ORB.Const THEN x.type := ORB.longType
         ELSE
+          (* sign-extend: LONGINT is signed, like INTEGER. A BYTE was masked
+             to 0..255 when it was loaded, so it extends with zeros. *)
           load(x); Set16(TRUE, TRUE);
           OCG.gen1(OCG.STZ * 32 + OCG.mDP, RegAddr(RH));   (* high word := 0 *)
+          OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(x.r));
+          OCG.gen1(OCG.BPL * 32 + OCG.mPCR, OCG.Here() + 2 + 2);
+          OCG.gen1(OCG.DEC * 32 + OCG.mDP, RegAddr(RH));   (* negative: high word := FFFFH *)
           incR; x.type := ORB.longType
         END
       ELSIF ~toLong & IsLong(x.type) THEN
@@ -1949,8 +1954,13 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     ELSIF IsLong(x.type) THEN
       (* 32-bit compare: full subtract leaves C = (x>=y) and, after ORing the
          two word-differences, Z = (x=y) — exactly the flags emitBranch tests
-         for a size-4 (unsigned) operand. *)
+         for a size-4 operand, which are those of an unsigned compare.
+         LONGINT is signed, so for the ordering relations the sign bit of
+         both operands is inverted first: x < y signed is the same as
+         (x + 2^31) < (y + 2^31) unsigned. Equality is unaffected. EOR,
+         LDA and STA leave the carry of the low subtract alone. *)
       Set16(TRUE, TRUE);
+      signedCmp := (op = ORS.lss) OR (op = ORS.geq) OR (op = ORS.leq) OR (op = ORS.gtr);
       IF (y.mode = ORB.Const) & (y.type.form # ORB.Proc) THEN
         load(x);
         OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(x.r));
@@ -1958,7 +1968,12 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         OCG.gen1(OCG.SBC * 32 + OCG.mImm, Lo16(y.a));
         OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH));      (* low diff -> scratch *)
         OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(x.r + 1));
-        OCG.gen1(OCG.SBC * 32 + OCG.mImm, Hi16(y.a));
+        IF signedCmp THEN
+          OCG.gen1(OCG.EOR * 32 + OCG.mImm, 8000H);
+          OCG.gen1(OCG.SBC * 32 + OCG.mImm, (Hi16(y.a) + 8000H) MOD 10000H)
+        ELSE
+          OCG.gen1(OCG.SBC * 32 + OCG.mImm, Hi16(y.a))
+        END;
         OCG.gen1(OCG.ORA * 32 + OCG.mDP, RegAddr(RH));      (* Z := full equality *)
         RH := RH - 2
       ELSE
@@ -1967,7 +1982,13 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         OCG.Sec;
         OCG.gen1(OCG.SBC * 32 + OCG.mDP, RegAddr(y.r));
         OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH));      (* low diff -> scratch *)
+        IF signedCmp THEN  (* y's register is a temporary: flip its sign in place *)
+          OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(y.r + 1));
+          OCG.gen1(OCG.EOR * 32 + OCG.mImm, 8000H);
+          OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(y.r + 1))
+        END;
         OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(x.r + 1));
+        IF signedCmp THEN OCG.gen1(OCG.EOR * 32 + OCG.mImm, 8000H) END;
         OCG.gen1(OCG.SBC * 32 + OCG.mDP, RegAddr(y.r + 1));
         OCG.gen1(OCG.ORA * 32 + OCG.mDP, RegAddr(RH));      (* Z := full equality *)
         RH := RH - 4
@@ -2029,11 +2050,39 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     x.origType := ORB.intType
   END RealRelation;
 
-  PROCEDURE StringRelation*(op: INTEGER; VAR x, y: Item);
+  (* The far address of a string operand in two registers (address, bank).
+     A string constant lives in this module's data, which is in bank 0. *)
+  PROCEDURE strAdr(VAR x: Item);
   BEGIN
-    IF x.type.form = ORB.String THEN loadStringAdr(x) ELSE loadAdr(x) END;
-    IF y.type.form = ORB.String THEN loadStringAdr(y) ELSE loadAdr(y) END;
-    RH := RH - 2;
+    IF x.type.form = ORB.String THEN
+      loadStringAdr(x);
+      OCG.gen1(OCG.STZ * 32 + OCG.mDP, RegAddr(RH)); incR
+    ELSE loadAdr(x)
+    END
+  END strAdr;
+
+  (* Compare two 0X-terminated strings character by character. The loop
+     ends at the first difference or at the common terminator, leaving
+     Z = (x = y) and C = (x >= y) from the 8-bit CMP of that character —
+     the flags emitBranch tests for an unsigned operand. REP changes
+     neither. *)
+  PROCEDURE StringRelation*(op: INTEGER; VAR x, y: Item);
+    VAR loopTop: LONGINT;
+  BEGIN
+    strAdr(x); strAdr(y);
+    Set16(TRUE, TRUE);
+    OCG.gen1(OCG.LDY * 32 + OCG.mImm, 0);
+    Set8(TRUE, FALSE);
+    loopTop := OCG.Here();
+    OCG.gen1(OCG.LDA * 32 + OCG.mDPIndLY, RegAddr(x.r));
+    OCG.gen1(OCG.CMP * 32 + OCG.mDPIndLY, RegAddr(y.r));
+    OCG.gen1(OCG.BNE * 32 + OCG.mPCR, OCG.Here() + 2 + 7);   (* differ *)
+    OCG.gen1(OCG.CMP * 32 + OCG.mImm, 0);
+    OCG.gen1(OCG.BEQ * 32 + OCG.mPCR, OCG.Here() + 2 + 3);   (* both ended *)
+    OCG.Iny;
+    OCG.gen1(OCG.BRA * 32 + OCG.mPCR, loopTop);
+    Set16(TRUE, FALSE);
+    RH := RH - 4;
     SetCC(x, relmap[op - ORS.eql])
   END StringRelation;
 

@@ -309,7 +309,10 @@ MODULE OCG; (* 65C816 instruction encoder.
     | BRA:
         IF mode = mFix THEN ofix(80H, v1)
         ELSIF isBr(mode) THEN
-          r := v1 - (pc + 1);
+          (* the offset counts from the end of the two-byte BRA. (The C
+             original tested v1 - (pc + 1), so a branch of exactly -129
+             was emitted as BRA with the offset wrapped to +127.) *)
+          r := v1 - (pc + 2);
           IF (r > 127) OR (r < -128) THEN
             brl := v1 - (pc + 3); ow(82H, brl)
           ELSE orel(80H, v1)
