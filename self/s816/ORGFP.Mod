@@ -18,13 +18,17 @@ MODULE ORGFP; (* 65C816 floating-point subroutine library — companion to ORG.
     FP_PROD2 = 3AH; FP_TEMP = 3CH; FP_TEMP2 = 3EH; FP_CNT = 40H;
     (* FP operation indices *)
     FP_ADD* = 0; FP_MUL* = 1; FP_DIV* = 2; FP_CMP* = 3;
-    FP_FLOOR* = 4; FP_FLT* = 5; FP_OPS = 6;
-    maxFPFixups = 64;
+    FP_FLOOR* = 4; FP_FLT* = 5;
+    (* LONGINT operations, which share the workspace and the fixups:
+       L_MUL: A := A * B;  L_DIV: A := A DIV B, B := A MOD B (B > 0) *)
+    L_MUL* = 6; L_DIV* = 7; FP_OPS = 8;
+    maxFPFixups = 256;
 
   VAR
     fpFixups: ARRAY FP_OPS, maxFPFixups OF LONGINT;
     fpFixupCount: ARRAY FP_OPS OF INTEGER;
     fpSubAddr: ARRAY FP_OPS OF LONGINT;
+    full: BOOLEAN;   (* a call did not fit the fixup table *)
 
   (* Local copies of ORG's forward-branch helpers — pure OCG, kept here so
      this module has no dependency back on ORG. *)
@@ -40,14 +44,20 @@ MODULE ORGFP; (* 65C816 floating-point subroutine library — companion to ORG.
 
   PROCEDURE Init*;
     VAR i: INTEGER;
-  BEGIN FOR i := 0 TO FP_OPS - 1 DO fpFixupCount[i] := 0 END
+  BEGIN full := FALSE;
+    FOR i := 0 TO FP_OPS - 1 DO fpFixupCount[i] := 0 END
   END Init;
+
+  PROCEDURE Full*(): BOOLEAN;
+  BEGIN RETURN full
+  END Full;
 
   PROCEDURE AddFixup*(idx: INTEGER);
   BEGIN
     IF fpFixupCount[idx] < maxFPFixups THEN
       fpFixups[idx, fpFixupCount[idx]] := OCG.Here() + 1;
       fpFixupCount[idx] := fpFixupCount[idx] + 1
+    ELSE full := TRUE
     END
   END AddFixup;
 
@@ -787,6 +797,123 @@ MODULE ORGFP; (* 65C816 floating-point subroutine library — companion to ORG.
     OCG.Rts;
   END emitFP_CMP;
 
+  (* --- LONGINT multiply and divide --- *)
+
+  (* FP_A := -FP_A (32 bit) *)
+  PROCEDURE negA;
+  BEGIN
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_A_LO);
+    OCG.gen1(OCG.EOR * 32 + OCG.mImm, 0FFFFH);
+    OCG.Clc;
+    OCG.gen1(OCG.ADC * 32 + OCG.mImm, 1);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_A_LO);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_A_HI);
+    OCG.gen1(OCG.EOR * 32 + OCG.mImm, 0FFFFH);
+    OCG.gen1(OCG.ADC * 32 + OCG.mImm, 0);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_A_HI)
+  END negA;
+
+  (* A := A * B, the low 32 bits, which are the same signed or unsigned.
+     Shift and add; the loop ends when no bits of A are left. *)
+  PROCEDURE emitL_MUL;
+    VAR loop, p1, p2: LONGINT;
+  BEGIN
+    OCG.SetLongA(TRUE); OCG.SetLongI(TRUE);
+    fpSubAddr[L_MUL] := OCG.Here();
+    OCG.gen1(OCG.STZ * 32 + OCG.mDP, FP_PROD0);
+    OCG.gen1(OCG.STZ * 32 + OCG.mDP, FP_PROD1);
+    loop := OCG.Here();
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_A_LO);
+    OCG.gen1(OCG.ORA * 32 + OCG.mDP, FP_A_HI);
+    p1 := emitFwdBranch(OCG.BEQ);
+    OCG.gen1(OCG.LSR * 32 + OCG.mDP, FP_A_HI);
+    OCG.gen1(OCG.ROR * 32 + OCG.mDP, FP_A_LO);
+    p2 := emitFwdBranch(OCG.BCC);
+    OCG.Clc;
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_PROD0);
+    OCG.gen1(OCG.ADC * 32 + OCG.mDP, FP_B_LO);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_PROD0);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_PROD1);
+    OCG.gen1(OCG.ADC * 32 + OCG.mDP, FP_B_HI);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_PROD1);
+    patch(p2);
+    OCG.gen1(OCG.ASL * 32 + OCG.mDP, FP_B_LO);
+    OCG.gen1(OCG.ROL * 32 + OCG.mDP, FP_B_HI);
+    OCG.gen1(OCG.BRA * 32 + OCG.mPCR, loop);
+    patch(p1);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_PROD0);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_A_LO);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_PROD1);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_A_HI);
+    OCG.Rts
+  END emitL_MUL;
+
+  (* A := A DIV B, B := A MOD B for B > 0, as Oberon defines them: the
+     quotient is rounded down and the remainder is never negative.
+     Restoring division of |A|, 32 steps, the remainder in FP_M1; for a
+     negative A the results are then q = -q' - 1, r = B - r' if r' # 0,
+     and q = -q' otherwise. *)
+  PROCEDURE emitL_DIV;
+    VAR loop, p1, p2, p3: LONGINT;
+  BEGIN
+    OCG.SetLongA(TRUE); OCG.SetLongI(TRUE);
+    fpSubAddr[L_DIV] := OCG.Here();
+    OCG.gen1(OCG.STZ * 32 + OCG.mDP, FP_SIGN);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_A_HI);
+    p1 := emitFwdBranch(OCG.BPL);
+    negA;
+    OCG.gen1(OCG.DEC * 32 + OCG.mDP, FP_SIGN);
+    patch(p1);
+    OCG.gen1(OCG.STZ * 32 + OCG.mDP, FP_M1_LO);
+    OCG.gen1(OCG.STZ * 32 + OCG.mDP, FP_M1_HI);
+    OCG.gen1(OCG.LDX * 32 + OCG.mImm, 32);
+    loop := OCG.Here();
+    OCG.gen1(OCG.ASL * 32 + OCG.mDP, FP_A_LO);
+    OCG.gen1(OCG.ROL * 32 + OCG.mDP, FP_A_HI);
+    OCG.gen1(OCG.ROL * 32 + OCG.mDP, FP_M1_LO);
+    OCG.gen1(OCG.ROL * 32 + OCG.mDP, FP_M1_HI);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_M1_LO);
+    OCG.Sec;
+    OCG.gen1(OCG.SBC * 32 + OCG.mDP, FP_B_LO);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_TEMP);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_M1_HI);
+    OCG.gen1(OCG.SBC * 32 + OCG.mDP, FP_B_HI);
+    p1 := emitFwdBranch(OCG.BCC);            (* remainder < B: no subtraction *)
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_M1_HI);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_TEMP);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_M1_LO);
+    OCG.gen1(OCG.INC * 32 + OCG.mDP, FP_A_LO);
+    patch(p1);
+    OCG.Dex;
+    OCG.gen1(OCG.BNE * 32 + OCG.mPCR, loop);
+    OCG.gen1(OCG.BIT * 32 + OCG.mDP, FP_SIGN);
+    p1 := emitFwdBranch(OCG.BPL);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_M1_LO);
+    OCG.gen1(OCG.ORA * 32 + OCG.mDP, FP_M1_HI);
+    p2 := emitFwdBranch(OCG.BEQ);
+    OCG.Sec;
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_B_LO);
+    OCG.gen1(OCG.SBC * 32 + OCG.mDP, FP_M1_LO);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_M1_LO);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_B_HI);
+    OCG.gen1(OCG.SBC * 32 + OCG.mDP, FP_M1_HI);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_M1_HI);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_A_LO);
+    OCG.gen1(OCG.EOR * 32 + OCG.mImm, 0FFFFH);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_A_LO);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_A_HI);
+    OCG.gen1(OCG.EOR * 32 + OCG.mImm, 0FFFFH);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_A_HI);
+    p3 := emitFwdBranch(OCG.BRA);
+    patch(p2);
+    negA;
+    patch(p3); patch(p1);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_M1_LO);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_B_LO);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_M1_HI);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_B_HI);
+    OCG.Rts
+  END emitL_DIV;
 
   PROCEDURE EmitSubroutines*;
   BEGIN
@@ -795,7 +922,9 @@ MODULE ORGFP; (* 65C816 floating-point subroutine library — companion to ORG.
     IF fpFixupCount[FP_ADD] > 0 THEN emitFP_ADD END;
     IF fpFixupCount[FP_MUL] > 0 THEN emitFP_MUL END;
     IF fpFixupCount[FP_DIV] > 0 THEN emitFP_DIV END;
-    IF fpFixupCount[FP_CMP] > 0 THEN emitFP_CMP END
+    IF fpFixupCount[FP_CMP] > 0 THEN emitFP_CMP END;
+    IF fpFixupCount[L_MUL] > 0 THEN emitL_MUL END;
+    IF fpFixupCount[L_DIV] > 0 THEN emitL_DIV END
   END EmitSubroutines;
 
   PROCEDURE FixupCalls*;

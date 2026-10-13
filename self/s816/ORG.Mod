@@ -660,9 +660,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
 
   (* Adapt an integer item x to LONGINT (toLong) or INTEGER width — the
      conversion the frontend never inserts (it treats both as form Int).
-     Widening zero-extends (OS16 addresses/sizes are non-negative; negative
-     LONGINT constants stay correct because they go through the const path);
-     narrowing keeps the low word. For a register operand this MUST be the top
+     Widening sign-extends; narrowing keeps the low word. For a register operand this MUST be the top
      of the register stack (x.r+1 = RH) so the appended/dropped high word stays
      contiguous — callers only convert a freshly-loaded top item or a const. *)
   PROCEDURE cvt(VAR x: Item; toLong: BOOLEAN);
@@ -695,12 +693,118 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
      downstream. Constants fold by value, so retyping is free. *)
   PROCEDURE promoteConst(VAR x, y: Item);
   BEGIN
+    (* a constant that does not fit a word is a LONGINT whatever it is
+       combined with: 100000 * i is a LONGINT product *)
+    IF (x.mode = ORB.Const) & (x.type # NIL) & (x.type.form = ORB.Int)
+       & ((x.a > 0FFFFH) OR (x.a < -8000H)) THEN x.type := ORB.longType END;
+    IF (y.mode = ORB.Const) & (y.type # NIL) & (y.type.form = ORB.Int)
+       & ((y.a > 0FFFFH) OR (y.a < -8000H)) THEN y.type := ORB.longType END;
     IF IsLong(x.type) & (y.mode = ORB.Const) & (y.type # NIL)
        & (y.type.form = ORB.Int) & ~IsLong(y.type) THEN y.type := ORB.longType
     ELSIF IsLong(y.type) & (x.mode = ORB.Const) & (x.type # NIL)
        & (x.type.form = ORB.Int) & ~IsLong(x.type) THEN x.type := ORB.longType
     END
   END promoteConst;
+
+  (* The word above register r becomes the sign of register r. *)
+  PROCEDURE signExt(r: LONGINT);
+  BEGIN
+    Set16(TRUE, TRUE);
+    OCG.gen1(OCG.STZ * 32 + OCG.mDP, RegAddr(r + 1));
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(r));
+    OCG.gen1(OCG.BPL * 32 + OCG.mPCR, OCG.Here() + 2 + 2);
+    OCG.gen1(OCG.DEC * 32 + OCG.mDP, RegAddr(r + 1))
+  END signExt;
+
+  (* Load both operands of a LONGINT operation, widening an INTEGER one.
+     On exit both are two-word registers and together they are the top
+     four of the register stack, in either order.
+     cvt widens the top of the stack only. An operand that is in registers
+     already (an expression, or the address of a designator) lies below
+     whatever is loaded after it, so an INTEGER x under y is widened here:
+     y moves up a word to make room, or, if x is still an address, its
+     value is loaded over the address and the bank word takes the sign. *)
+  PROCEDURE loadLongPair(VAR x, y: Item);
+    VAR yHeld, late: BOOLEAN; n: LONGINT;
+  BEGIN
+    yHeld := (y.mode = Reg) OR (y.mode = RegI); late := FALSE;
+    IF x.mode = ORB.Const THEN x.type := ORB.longType
+    ELSIF ~IsLong(x.type) THEN
+      IF ~yHeld THEN cvt(x, TRUE)
+      ELSIF x.mode = Reg THEN
+        IF (y.mode = RegI) OR IsLong(y.type) THEN n := 2 ELSE n := 1 END;
+        Set16(TRUE, TRUE);
+        WHILE n > 0 DO n := n - 1;
+          OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(y.r + n));
+          OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(y.r + n + 1))
+        END;
+        y.r := y.r + 1; incR; signExt(x.r); x.type := ORB.longType
+      ELSIF x.mode = RegI THEN
+        load(x); RH := RH + 1;   (* load gave up the bank word; it is x's high word now *)
+        signExt(x.r); x.type := ORB.longType
+      ELSE late := TRUE          (* not in registers: load it after y *)
+      END
+    END;
+    IF ~yHeld THEN load(x) END;
+    cvt(y, TRUE); load(y);
+    IF late THEN cvt(x, TRUE) END;
+    load(x)
+  END loadLongPair;
+
+  (* Two-word register r := -r. *)
+  PROCEDURE longNeg(r: LONGINT);
+  BEGIN
+    Set16(TRUE, TRUE);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(r));
+    OCG.gen1(OCG.EOR * 32 + OCG.mImm, 0FFFFH);
+    OCG.Clc;
+    OCG.gen1(OCG.ADC * 32 + OCG.mImm, 1);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(r));
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(r + 1));
+    OCG.gen1(OCG.EOR * 32 + OCG.mImm, 0FFFFH);
+    OCG.gen1(OCG.ADC * 32 + OCG.mImm, 0);              (* + carry from low *)
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(r + 1))
+  END longNeg;
+
+  (* x := x op y by the LONGINT subroutine op of ORGFP (L_MUL, L_DIV).
+     rem selects the second result of L_DIV, the remainder; divisor is
+     set where y must be positive. *)
+  PROCEDURE longCall(op: INTEGER; VAR x, y: Item; rem, divisor: BOOLEAN);
+    VAR d, p: LONGINT;
+  BEGIN
+    IF divisor & (y.mode = ORB.Const) & (y.a <= 0) THEN ORS.Mark("bad divisor") END;
+    loadLongPair(x, y); Set16(TRUE, TRUE);
+    IF divisor & check & (y.mode # ORB.Const) THEN
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(y.r + 1));
+      p := emitFwdBranch(OCG.BMI);
+      OCG.gen1(OCG.ORA * 32 + OCG.mDP, RegAddr(y.r));
+      OCG.gen1(OCG.BNE * 32 + OCG.mPCR, OCG.Here() + 2 + 2);
+      patch(p);
+      OCG.gen1(OCG.BRK * 32 + OCG.mImm, 6)
+    END;
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(x.r));
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGFP.FP_A_LO);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(x.r + 1));
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGFP.FP_A_HI);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(y.r));
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGFP.FP_B_LO);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(y.r + 1));
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGFP.FP_B_HI);
+    ORGFP.AddFixup(op); OCG.gen1(OCG.JSR * 32 + OCG.mAbs, 0);
+    d := RH - 4;                                       (* the lower pair *)
+    IF rem THEN
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGFP.FP_B_LO);
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(d));
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGFP.FP_B_HI);
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(d + 1))
+    ELSE
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGFP.FP_A_LO);
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(d));
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGFP.FP_A_HI);
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(d + 1))
+    END;
+    RH := RH - 2; x.r := d; x.mode := Reg; x.type := ORB.longType
+  END longCall;
 
   PROCEDURE loadAdr(VAR x: Item);
     VAR sb: LONGINT;
@@ -924,6 +1028,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       END
     END;
     IF runtime THEN
+      cvt(y, FALSE);   (* a LONGINT index: its low word *)
       load(y);
       IF check THEN
         IF lim >= 0 THEN
@@ -1410,16 +1515,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     IF IsLong(x.type) THEN
       IF x.mode = ORB.Const THEN x.a := -x.a
       ELSE
-        load(x); Set16(TRUE, TRUE);                        (* two's complement 32-bit *)
-        OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(x.r));
-        OCG.gen1(OCG.EOR * 32 + OCG.mImm, 0FFFFH);
-        OCG.Clc;
-        OCG.gen1(OCG.ADC * 32 + OCG.mImm, 1);
-        OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(x.r));
-        OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(x.r + 1));
-        OCG.gen1(OCG.EOR * 32 + OCG.mImm, 0FFFFH);
-        OCG.gen1(OCG.ADC * 32 + OCG.mImm, 0);              (* + carry from low *)
-        OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(x.r + 1))
+        load(x); longNeg(x.r)                              (* two's complement 32-bit *)
       END
     ELSIF x.type.form = ORB.Int THEN
       Set16(TRUE, TRUE);
@@ -1510,8 +1606,8 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
             OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(x.r))
           END
         END
-      ELSIF IsLong(x.type) THEN
-        load(x); cvt(y, TRUE); load(y);             (* widen an INTEGER y operand *)
+      ELSIF IsLong(x.type) OR IsLong(y.type) THEN
+        loadLongPair(x, y);                         (* widens an INTEGER operand *)
         destR := RH - 4;                            (* compact into the lower pair *)
         longAddReg(destR, x.r, y.r, OCG.ADC, FALSE);
         RH := RH - 2; x.r := RH - 2
@@ -1540,8 +1636,8 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
             OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(x.r))
           END
         END
-      ELSIF IsLong(x.type) THEN
-        load(x); cvt(y, TRUE); load(y);             (* widen an INTEGER y operand *)
+      ELSIF IsLong(x.type) OR IsLong(y.type) THEN
+        loadLongPair(x, y);                         (* widens an INTEGER operand *)
         destR := RH - 4;                            (* compact into the lower pair *)
         longAddReg(destR, x.r, y.r, OCG.SBC, TRUE);
         RH := RH - 2; x.r := RH - 2
@@ -1623,7 +1719,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         OCG.Dex;
         OCG.gen1(OCG.BNE * 32 + OCG.mPCR, loopTop)
       END
-    ELSIF IsLong(x.type) THEN ORS.Mark("32-bit * unimplemented")
+    ELSIF IsLong(x.type) OR IsLong(y.type) THEN longCall(ORGFP.L_MUL, x, y, FALSE, FALSE)
     ELSIF y.mode = ORB.Const THEN
       load(x); load(y); mulLoop(x.r, y.r);
       RH := RH - 1; x.r := RH - 1;
@@ -1694,7 +1790,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
           END;
           OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(x.r))
         END
-      ELSIF IsLong(x.type) THEN ORS.Mark("32-bit DIV unimplemented")
+      ELSIF IsLong(x.type) OR IsLong(y.type) THEN longCall(ORGFP.L_DIV, x, y, FALSE, TRUE)
       ELSIF y.mode = ORB.Const THEN
         IF y.a > 0 THEN
           load(x); Set16(TRUE, TRUE);
@@ -1737,7 +1833,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
           OCG.gen1(OCG.AND * 32 + OCG.mImm, y.a - 1);
           OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(x.r))
         END
-      ELSIF IsLong(x.type) THEN ORS.Mark("32-bit MOD unimplemented")
+      ELSIF IsLong(x.type) OR IsLong(y.type) THEN longCall(ORGFP.L_DIV, x, y, TRUE, TRUE)
       ELSIF y.mode = ORB.Const THEN
         IF y.a > 0 THEN
           load(x); Set16(TRUE, TRUE);
@@ -1951,7 +2047,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         OCG.gen1(OCG.CMP * 32 + OCG.mDP, RegAddr(y.r + 1));
         RH := RH - 4
       END
-    ELSIF IsLong(x.type) THEN
+    ELSIF IsLong(x.type) OR IsLong(y.type) THEN
       (* 32-bit compare: full subtract leaves C = (x>=y) and, after ORing the
          two word-differences, Z = (x=y) — exactly the flags emitBranch tests
          for a size-4 operand, which are those of an unsigned compare.
@@ -1962,7 +2058,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       Set16(TRUE, TRUE);
       signedCmp := (op = ORS.lss) OR (op = ORS.geq) OR (op = ORS.leq) OR (op = ORS.gtr);
       IF (y.mode = ORB.Const) & (y.type.form # ORB.Proc) THEN
-        load(x);
+        cvt(x, TRUE); load(x);
         OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(x.r));
         OCG.Sec;
         OCG.gen1(OCG.SBC * 32 + OCG.mImm, Lo16(y.a));
@@ -1977,7 +2073,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         OCG.gen1(OCG.ORA * 32 + OCG.mDP, RegAddr(RH));      (* Z := full equality *)
         RH := RH - 2
       ELSE
-        load(x); cvt(y, TRUE); load(y);                    (* widen an INTEGER y operand *)
+        loadLongPair(x, y);                                (* widens an INTEGER operand *)
         OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(x.r));
         OCG.Sec;
         OCG.gen1(OCG.SBC * 32 + OCG.mDP, RegAddr(y.r));
@@ -2727,12 +2823,12 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
               OR (x.type.base.form = ORB.Proc) OR IsLong(x.type.base);
       IF r > 0 THEN
         Set16(TRUE, TRUE);
-        OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(0));
-        OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(r));
-        IF wide THEN
+        IF wide THEN   (* the high word first: with r = 1 the low word lands on it *)
           OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(1));
           OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(r + 1))
         END;
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(0));
+        OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(r));
         RestoreRegs(r)
       END;
       x.mode := Reg; x.r := r;
@@ -2884,12 +2980,29 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
 
   (* --- inline standard procedures --- *)
   PROCEDURE Increment*(upordown: LONGINT; VAR x, y: Item);
-    VAR zr: LONGINT; isByte, isInc, useIncDec: BOOLEAN;
+    VAR zr: LONGINT; isByte, isInc, useIncDec: BOOLEAN; z: Item;
   BEGIN
     isByte := x.type = ORB.byteType; isInc := upordown = 0;
     IF y.type.form = ORB.NoTyp THEN y.mode := ORB.Const; y.a := 1 END;
     useIncDec := (y.mode = ORB.Const) & (y.a = 1);
-    IF (x.mode = ORB.Var) & (x.r > 0) THEN
+    IF ~IsLong(x.type) THEN cvt(y, FALSE) END;   (* a LONGINT step: its low word *)
+    IF IsLong(x.type) THEN
+      (* x := x + y on a copy z of the designator. The step is loaded
+         first so that it is the top of the stack when it is widened. *)
+      IF y.mode = ORB.Const THEN y.type := ORB.longType ELSE cvt(y, TRUE); load(y) END;
+      z := x;
+      IF x.mode = RegI THEN   (* z's value replaces a copy of the address *)
+        Set16(TRUE, TRUE);
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(x.r));
+        OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH));
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(x.r + 1));
+        OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH + 1));
+        z.r := RH; incR; incR
+      END;
+      load(z);
+      IF isInc THEN AddOp(ORS.plus, z, y) ELSE AddOp(ORS.minus, z, y) END;
+      Store(x, z)
+    ELSIF (x.mode = ORB.Var) & (x.r > 0) THEN
       zr := RH;
       IF isByte THEN Set8(TRUE, FALSE) ELSE Set16(TRUE, TRUE) END;
       OCG.gen1(OCG.LDA * 32 + OCG.mSR, x.a + frame);
@@ -3239,6 +3352,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
 
   (* --- inline functions --- *)
   PROCEDURE Abs*(VAR x: Item);
+    VAR p: LONGINT;
   BEGIN
     IF x.mode = ORB.Const THEN
       IF x.a < 0 THEN x.a := -x.a END
@@ -3249,6 +3363,12 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(x.r + 1));
         OCG.gen1(OCG.AND * 32 + OCG.mImm, 7FFFH);
         OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(x.r + 1))
+      ELSIF IsLong(x.type) THEN
+        Set16(TRUE, TRUE);
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(x.r + 1));
+        p := emitFwdBranch(OCG.BPL);
+        longNeg(x.r);
+        patch(p)
       ELSE
         Set16(TRUE, TRUE);
         OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(x.r));
@@ -3266,6 +3386,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(x.r));
     OCG.gen1(OCG.AND * 32 + OCG.mImm, 1);
     OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(x.r));
+    IF IsLong(x.type) THEN RH := RH - 1 END;   (* the low word decides *)
     SetCC(x, NE); RH := RH - 1
   END Odd;
 
@@ -3497,7 +3618,8 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   PROCEDURE Close*(modid: ARRAY OF CHAR; key: LONGINT; nofent: LONGINT);
     VAR wInfo: ORGW.ModInfo;
   BEGIN
-    IF OCG.Faulted() THEN
+    IF ORGFP.Full() THEN ORS.Mark("too many REAL or LONGINT operations")
+    ELSIF OCG.Faulted() THEN
       ORS.Mark("program too large: code or relocation table overflow")
     ELSE
       OCG.Rtl;   (* exit: emulator calls main with JSL, return with RTL *)
