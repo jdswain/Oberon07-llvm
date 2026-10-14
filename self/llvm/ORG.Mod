@@ -104,6 +104,8 @@ MODULE ORG; (* Interface to the LLVM code generator (DDR C-bridge module).
   (* --- boolean --- *)
   PROCEDURE Not*(VAR x: Item);
   BEGIN END Not;
+  PROCEDURE Rel1*(VAR x: Item);
+  BEGIN END Rel1;
   PROCEDURE And1*(VAR x: Item);
   BEGIN END And1;
   PROCEDURE And2*(VAR x, y: Item);

@@ -39,6 +39,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     LE = 6; GT = 14; AL = 7; NV = 15;
 
     maxForNest = 8;        (* max nested FOR loops with a non-const limit *)
+    maxFar = 128;          (* max non-exported procedures assigned to variables *)
     maxEnt = 256;          (* max .816 export-table entries *)
     maxMeth = 64;          (* max vtable slots per type *)
     maxVtFix = 512;        (* max vtable-slot loader fixups per module *)
@@ -106,6 +107,9 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
        Enter, so single module vars suffice) *)
     curFrameSize: LONGINT;
     curExpo, curIntProc: BOOLEAN;
+    (* far entries of procedures that are not exported; see load *)
+    farProc, farEntry: ARRAY maxFar OF LONGINT;
+    nofFar: INTEGER;
 
   (* --- helpers --- *)
 
@@ -436,7 +440,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
 
   (* --- load: materialize item x into register(s), leaving x in Reg mode --- *)
   PROCEDURE load(VAR x: Item);
-    VAR perAddr, perOp, mno, exno, encoded, sb, falseChain: LONGINT;
+    VAR perAddr, perOp, mno, exno, encoded, sb, falseChain, skip: LONGINT; i: INTEGER;
   BEGIN
     IF (x.mode # Reg) & (x.type # NIL) & (x.type.form = ORB.Intfc) THEN
       (* fat value {data, itable}: 4 words from the designator *)
@@ -451,8 +455,59 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
           OCG.gen1(OCG.STZ * 32 + OCG.mDP, RegAddr(RH + 1));
           x.r := RH; incR; incR
         ELSIF x.type.form = ORB.Proc THEN
-          IF (x.r > 0) OR ((x.r = 0) & (x.b = 0)) THEN
-            ORS.Mark("not exportd")
+          IF x.r > 0 THEN ORS.Mark("not a global procedure")
+          ELSIF (x.r = 0) & (x.b = 0) THEN
+            (* A procedure that is not exported returns with RTS and runs
+               on its caller's static base, but a procedure variable is
+               called far, and perhaps from another module. Its value is
+               therefore the address of an entry made here, which sets
+               the static base as an exported procedure does and calls
+               the procedure near (far in a LARGE module). Parameters and
+               result are in registers, so nothing has to be moved.
+               There is one entry for each procedure, made where it is
+               first assigned, so that its values compare equal. *)
+            Set16(TRUE, TRUE);
+            i := 0;
+            WHILE (i < nofFar) & (farProc[i] # x.a) DO i := i + 1 END;
+            IF i < nofFar THEN perAddr := farEntry[i]
+            ELSE
+            IF nofFar < maxFar THEN farProc[nofFar] := x.a; farEntry[nofFar] := OCG.Here() + 2; nofFar := nofFar + 1
+            ELSE ORS.Mark("too many procedures assigned")
+            END;
+            skip := emitFwdBranch(OCG.BRA);
+            perAddr := OCG.Here();                 (* the entry *)
+            OCG.gen1(OCG.LDA * 32 + OCG.mDP, SB_DP);
+            OCG.Pha;
+            OCG.gen1(OCG.LDA * 32 + OCG.mDP, BANK_DP);
+            OCG.Pha;
+            OCG.AddRel(OCG.Here());
+            OCG.gen1(OCG.LDA * 32 + OCG.mImm, 0);
+            OCG.gen1(OCG.STA * 32 + OCG.mDP, SB_DP);
+            OCG.AddRel(OCG.Here() + 80000000H);
+            OCG.gen1(OCG.LDA * 32 + OCG.mImm, 0);
+            OCG.gen1(OCG.STA * 32 + OCG.mDP, BANK_DP);
+            IF largeMod THEN OCG.gen1(OCG.JSL * 32 + OCG.mAbsL, x.a)
+            ELSE OCG.gen1(OCG.JSR * 32 + OCG.mAbs, x.a)
+            END;
+            Set16(TRUE, TRUE);
+            OCG.Pla;
+            OCG.gen1(OCG.STA * 32 + OCG.mDP, BANK_DP);
+            OCG.Pla;
+            OCG.gen1(OCG.STA * 32 + OCG.mDP, SB_DP);
+            OCG.Rtl;
+            patch(skip)
+            END;
+            perOp := perAddr - OCG.Here() - 3;
+            OCG.gen1(OCG.PER * 32 + OCG.mImm, Lo16(perOp));
+            OCG.Pla;
+            OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH));
+            OCG.gen1(OCG.STZ * 32 + OCG.mDP, RegAddr(RH + 1));
+            OCG.Phk;
+            Set8(TRUE, FALSE);
+            OCG.Pla;
+            OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH + 1));
+            Set16(TRUE, FALSE);
+            x.r := RH; incR; incR
           ELSIF (x.r = 0) & (x.b = 1) THEN
             Set16(TRUE, TRUE);
             perAddr := OCG.Here();
@@ -644,6 +699,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
           RH := RH - 1
         END
       ELSIF x.mode = Cond THEN
+        Set16(TRUE, TRUE);   (* REP leaves the flags of the condition alone *)
         emitBranch(negated(x.r), x.origType, OCG.mFix, x.a);
         falseChain := OCG.Here() - 2;   (* BRL offset field = FALSE chain head *)
         FixLink(x.b);                    (* TRUE path *)
@@ -2024,10 +2080,19 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   END SetOp;
 
   (* --- relations --- *)
+
+  (* Called with the left operand of a relation before the right one is
+     compiled. A condition is only flags and pending branches, which the
+     code of the right operand would destroy: make it a value. *)
+  PROCEDURE Rel1*(VAR x: Item);
+  BEGIN
+    IF x.mode = Cond THEN load(x) END
+  END Rel1;
   PROCEDURE IntRelation*(op: INTEGER; VAR x, y: Item);
     VAR isPointer, use8, useSigned, signedCmp: BOOLEAN;
   BEGIN
     promoteConst(x, y);
+    IF y.mode = Cond THEN load(y) END;   (* while its flags are still there *)
     isPointer :=(x.type.form = ORB.Pointer) OR (x.type.form = ORB.NilTyp) OR (x.type.form = ORB.Proc);
     use8 := ~isPointer & ((x.type.form = ORB.Char) OR (x.type.form = ORB.Byte) OR (x.type.form = ORB.Bool));
     useSigned := ~isPointer & ~use8 & (x.type.form = ORB.Int);
@@ -2105,8 +2170,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         END;
         RH := RH - 1
       ELSE
-        IF (x.mode = Cond) OR (y.mode = Cond) THEN ORS.Mark("not implemented") END;
-        load(x); load(y);
+        load(x); load(y);   (* a condition on the left was loaded by Rel1 *)
         OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(x.r));
         IF signedCmp THEN
           OCG.Sec;
@@ -2792,11 +2856,13 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         OCG.Rtl;
         RH := RH - 2
       ELSE
+        (* the address was saved with the registers; take it back into
+           the two above the arguments, which are in R0.. *)
         OCG.Pla;
-        OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(1));
+        OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH + 1));
         OCG.Pla;
-        OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(0));
-        addrReg := RegAddr(0); bankReg := RegAddr(1);
+        OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH));
+        addrReg := RegAddr(RH); bankReg := RegAddr(RH + 1);
         r := r - 2; frame := frame - 4;
         IF check THEN
           OCG.gen1(OCG.LDA * 32 + OCG.mDP, addrReg);
@@ -3141,13 +3207,16 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   END Include;
 
   PROCEDURE Assert*(VAR x: Item);
-    VAR cond: LONGINT;
   BEGIN
+    (* where the condition holds, branch over the trap; where it fails,
+       fall or jump into it *)
     IF x.mode # Cond THEN loadCond(x) END;
-    IF x.a = 0 THEN cond := negated(x.r)
-    ELSE FixLink(x.a); x.b := OCG.Here() - 1; cond := 7
+    IF x.r # NV THEN
+      emitBranch(x.r, x.origType, OCG.mFix, x.b);
+      x.b := OCG.Here() - 2
     END;
-    Trap(cond, 7);
+    FixLink(x.a);
+    OCG.gen1(OCG.BRK * 32 + OCG.mImm, 7);
     FixLink(x.b)
   END Assert;
 
@@ -3584,7 +3653,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     fixorgP := 0; fixorgD := 0; fixorgT := 0;
     tdFixupC := 0; tdListC := 0; tdRefC := 0; vtFixC := 0;
     itabC := 0; itabRefC := 0;
-    ORGFP.Init;
+    ORGFP.Init; nofFar := 0;
     check := v # 0; version := v;
     IF v = 0 THEN
       OCG.SetPc(1);

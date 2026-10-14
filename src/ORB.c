@@ -833,7 +833,12 @@ static void OutType(Files_Rider *R, TypePtr t) {
         Write(R, -t->ref);
     } else {
         obj = t->typobj;
-        if (obj != NULL) {
+        /* A record gets a reference even without a name. An imported
+           record whose name was not exported has none here, and it may
+           contain a pointer to itself (a private list in a re-exported
+           type): without the reference its output would not end. */
+        if (obj != NULL || t->form == ORB_Record) {
+            if (Ref >= maxTypTab) { ORS_Mark("too many types exported"); Ref = maxTypTab - 1; }
             Write(R, Ref);
             t->ref = Ref;
             Ref++;

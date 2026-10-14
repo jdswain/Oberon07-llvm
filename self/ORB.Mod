@@ -711,7 +711,13 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
   BEGIN
     IF t.ref > 0 THEN Write(R, -t.ref)  (*type was already output*)
     ELSE
-      IF t.typobj # NIL THEN Write(R, Ref); t.ref := Ref; INC(Ref)
+      (* A record gets a reference even without a name. An imported
+         record whose name was not exported has none here, and it may
+         contain a pointer to itself (a private list in a re-exported
+         type): without the reference its output would not end. *)
+      IF (t.typobj # NIL) OR (t.form = Record) THEN
+        IF Ref >= maxTypTab THEN ORS.Mark("too many types exported"); Ref := maxTypTab - 1 END;
+        Write(R, Ref); t.ref := Ref; INC(Ref)
       ELSE Write(R, 0)  (*anonymous*)
       END;
       Write(R, t.form);

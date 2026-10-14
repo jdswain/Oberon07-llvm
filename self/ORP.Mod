@@ -822,7 +822,7 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
   BEGIN
     SimpleExpression(x);
     IF (sym >= ORS.eql) & (sym <= ORS.gtr) THEN
-      rel := sym; ORS.Get(sym);
+      rel := sym; ORG.Rel1(x); ORS.Get(sym);
       SimpleExpression(y);
       xf := x.type.form; yf := y.type.form;
       IF x.type = y.type THEN
