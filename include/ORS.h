@@ -26,7 +26,7 @@
 
 // Constants
 #define ORS_IDENT_LEN 32
-#define ORS_STRING_LEN 256
+#define ORS_STRING_LEN 1024     // a literal's characters, and its 0X
 
 // Symbol constants (tokens)
 typedef enum {

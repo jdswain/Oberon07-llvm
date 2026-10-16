@@ -145,9 +145,13 @@ static void ReadString(void) {
         if (i < ORS_STRING_LEN - 1) {
             ORS_str[i] = ch;
             i++;
+        } else if (i == ORS_STRING_LEN - 1) {
+            ORS_Mark("string too long");   // once; read on to the closing quote
+            i++;
         }
         ReadChar();
     }
+    if (i > ORS_STRING_LEN - 1) i = ORS_STRING_LEN - 1;
     
     ORS_str[i] = 0;
     ORS_slen = i + 1;  // Include null terminator
