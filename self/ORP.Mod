@@ -13,7 +13,8 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
 
   IMPORT Files, Out, ORS, ORB, ORG;
 
-  CONST VERSION = 2;   (* .816 v2: deferred type-descriptor layout (after vars+strings) *)
+  CONST VERSION = 3;   (* .816 v2: deferred type-descriptor layout (after vars+strings);
+                          v3: method table slots of address and bank *)
     WordSize = ORG.WordSize;   (* target word size, from the backend *)
 
   TYPE

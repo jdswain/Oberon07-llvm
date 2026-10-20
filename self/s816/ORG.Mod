@@ -46,8 +46,10 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     maxItab = 128;         (* max distinct (record,interface) itables per module *)
     maxItabRef = 256;      (* max PtrToIface conversion sites per module *)
     VtableOff = 16;        (* byte offset of vtable[0] in a TD: size(2) +
-                              3 ancestors(12) + nofmeth(2). Each slot is a 2-byte
-                              absolute in-bank method address filled by the loader. *)
+                              3 ancestors(12) + nofmeth(2). Each slot is 4 bytes,
+                              the method's address and its bank (v3), filled by the
+                              loader: modules are not all in one bank. *)
+    SlotSize = 4;
 
   TYPE
     Item* = RECORD
@@ -1357,13 +1359,13 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
           dcw := dcw + 2; k := k + 1
         END
       END;
-      (* method vtable: nofmeth (TOTAL incl. inherited), then that many 2-byte
-         slots holding the ABSOLUTE in-bank code address of the most-derived
-         impl. All modules load into one bank, so the loader fills every slot:
-         an own method (mno=0) as module_base + its code offset; an imported
-         inherited one (mno>0) via (mno, exno). Dispatch just reads the slot —
-         no per-caller code base, which is what makes an imported object's
-         method reachable from any module. *)
+      (* method vtable: nofmeth (TOTAL incl. inherited), then that many
+         4-byte slots holding the code address and bank of the most-derived
+         impl, which the loader fills: an own method (mno=0) as module_base
+         + its code offset, in this module's bank; an imported inherited one
+         (mno>0) via (mno, exno), in that module's bank. Dispatch just reads
+         the slot, so an imported object's method is reachable from any
+         module in any bank. *)
       nm := ORB.TotalMeths(T);
       IF nm > maxMeth THEN ORS.Mark("too many methods"); nm := 0 END;
       wa.data[dcw] := nm; dcw := dcw + 1;
@@ -1372,16 +1374,17 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         fillVt(T, nm);
         s := 0;
         WHILE s < nm DO
-          IF slotMeth[s] = NIL THEN wa.data[dcw + s] := 0   (* abstract: no impl *)
+          wa.data[dcw + 2 * s + 1] := 0;                    (* the bank, the loader's *)
+          IF slotMeth[s] = NIL THEN wa.data[dcw + 2 * s] := 0   (* abstract: no impl *)
           ELSE
             IF vtFixC >= maxVtFix THEN ORS.Mark("too many vtable fixups")
             ELSE
-              wa.vtFixOff[vtFixC] := tdBase + (dcw + s) * 2;
+              wa.vtFixOff[vtFixC] := tdBase + (dcw + 2 * s) * 2;
               IF slotMno[s] <= 0 THEN   (* own method: slot = base + offset *)
-                wa.data[dcw + s] := slotMeth[s].backend;
+                wa.data[dcw + 2 * s] := slotMeth[s].backend;
                 wa.vtFixMno[vtFixC] := 0; wa.vtFixExno[vtFixC] := 0
               ELSE                      (* imported inherited: loader resolves *)
-                wa.data[dcw + s] := 0;
+                wa.data[dcw + 2 * s] := 0;
                 wa.vtFixMno[vtFixC] := slotMno[s];
                 wa.vtFixExno[vtFixC] := slotMeth[s].exno
               END;
@@ -1390,7 +1393,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
           END;
           s := s + 1
         END;
-        dcw := dcw + nm
+        dcw := dcw + 2 * nm
       END;
       FindPtrFlds(T, 0, dcw);
       wa.data[dcw] := 0FFFFH; dcw := dcw + 1;
@@ -2161,9 +2164,12 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       IF use8 THEN Set8(TRUE, FALSE) END;
       signedCmp := useSigned & ((op = ORS.lss) OR (op = ORS.geq) OR (op = ORS.leq) OR (op = ORS.gtr));
       IF (y.mode = ORB.Const) & (y.type.form # ORB.Proc) THEN
+        (* x into A, which = 0 and # 0 test by Z alone: the flags load(x)
+           leaves are not x's when x was already a register (a procedure's
+           result), load then emitting nothing *)
         load(x);
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(x.r));
         IF (y.a # 0) OR ((op # ORS.eql) & (op # ORS.neq)) THEN
-          OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(x.r));
           IF signedCmp THEN
             OCG.Sec;
             OCG.gen1(OCG.SBC * 32 + OCG.mImm, y.a)
@@ -2765,7 +2771,8 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       OCG.gen1(OCG.ADC * 32 + OCG.mImm, 0);
       OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH + 9));
       OCG.gen1(OCG.LDA * 32 + OCG.mDPIndL, RegAddr(RH + 8));   (* slot index *)
-      OCG.gen1(OCG.ASL * 32 + OCG.mAcc, 0);                    (* *2 *)
+      OCG.gen1(OCG.ASL * 32 + OCG.mAcc, 0);
+      OCG.gen1(OCG.ASL * 32 + OCG.mAcc, 0);                    (* * SlotSize *)
       OCG.Clc;
       OCG.gen1(OCG.ADC * 32 + OCG.mImm, VtableOff);            (* vtable byte offset *)
       OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH + 8));
@@ -2786,10 +2793,14 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH + 5));
       OCG.gen1(OCG.LDA * 32 + OCG.mDPIndL, RegAddr(RH + 4));   (* method address *)
       OCG.gen1(OCG.STA * 32 + OCG.mDP, addrReg);
+      OCG.gen1(OCG.LDY * 32 + OCG.mImm, 2);
+      OCG.gen1(OCG.LDA * 32 + OCG.mDPIndLY, RegAddr(RH + 4));  (* its bank *)
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH + 6));
       OCG.Phk;
-      OCG.gen1(OCG.PER * 32 + OCG.mImm, 09H);
+      OCG.gen1(OCG.PER * 32 + OCG.mImm, 0BH);                  (* return: after the RTL *)
       Set8(TRUE, FALSE);
-      OCG.Phk;
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(RH + 6));
+      OCG.Pha;                                                 (* the method's bank *)
       Set16(TRUE, FALSE);
       OCG.gen1(OCG.LDA * 32 + OCG.mDP, addrReg);
       OCG.gen1(OCG.DEC * 32 + OCG.mAcc, 0);
@@ -2797,10 +2808,10 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       OCG.Rtl
     ELSIF x.dynDisp THEN
       (* dynamic dispatch: receiver (object pointer) is param 0 in R0/R1.
-         tag := [obj-4]; addr := [tag + VtableOff + slot*2] — the loader has
-         already filled that slot with the method's absolute in-bank address,
-         so no code base is added. All modules share one bank, so the call
-         bank is the current program bank (PHK). Scratch above RH. *)
+         tag := [obj-4]; the slot at tag + VtableOff + slot*SlotSize, which
+         the loader has filled with the method's address and bank: the call
+         goes there by RTL, the return address pushed first. Scratch above
+         RH. *)
       addrReg := RegAddr(RH);
       OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(0));
       OCG.Sec;
@@ -2811,7 +2822,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH + 3));
       OCG.gen1(OCG.LDA * 32 + OCG.mDPIndL, RegAddr(RH + 2));   (* TD addr lo *)
       OCG.Clc;
-      OCG.gen1(OCG.ADC * 32 + OCG.mImm, VtableOff + x.methSlot * 2);
+      OCG.gen1(OCG.ADC * 32 + OCG.mImm, VtableOff + x.methSlot * SlotSize);
       OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH + 4));
       OCG.gen1(OCG.LDY * 32 + OCG.mImm, 2);
       OCG.gen1(OCG.LDA * 32 + OCG.mDPIndLY, RegAddr(RH + 2));  (* TD bank *)
@@ -2819,10 +2830,14 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH + 5));
       OCG.gen1(OCG.LDA * 32 + OCG.mDPIndL, RegAddr(RH + 4));   (* method address *)
       OCG.gen1(OCG.STA * 32 + OCG.mDP, addrReg);
+      OCG.gen1(OCG.LDY * 32 + OCG.mImm, 2);
+      OCG.gen1(OCG.LDA * 32 + OCG.mDPIndLY, RegAddr(RH + 4));  (* its bank *)
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH + 6));
       OCG.Phk;
-      OCG.gen1(OCG.PER * 32 + OCG.mImm, 09H);
+      OCG.gen1(OCG.PER * 32 + OCG.mImm, 0BH);                  (* return: after the RTL *)
       Set8(TRUE, FALSE);
-      OCG.Phk;
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(RH + 6));
+      OCG.Pha;                                                 (* the method's bank *)
       Set16(TRUE, FALSE);
       OCG.gen1(OCG.LDA * 32 + OCG.mDP, addrReg);
       OCG.gen1(OCG.DEC * 32 + OCG.mAcc, 0);
@@ -3102,10 +3117,11 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       IF isByte THEN Set16(TRUE, TRUE) END;
       RH := RH - 1
     ELSE
+      (* through the address loadAdr leaves with its bank: a record a pointer
+         points to need not be in bank 0, where abs,X would go *)
       loadAdr(x); zr := RH;
       IF isByte THEN Set8(TRUE, FALSE) ELSE Set16(TRUE, TRUE) END;
-      OCG.gen1(OCG.LDX * 32 + OCG.mDP, RegAddr(x.r));
-      OCG.gen1(OCG.LDA * 32 + OCG.mAbsX, 0);
+      OCG.gen1(OCG.LDA * 32 + OCG.mDPIndL, RegAddr(x.r));   (* [address, bank] *)
       OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(zr));
       incR;
       IF y.mode = ORB.Const THEN
@@ -3128,9 +3144,8 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         END;
         OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(zr)); RH := RH - 1
       END;
-      OCG.gen1(OCG.LDX * 32 + OCG.mDP, RegAddr(x.r));
       OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(zr));
-      OCG.gen1(OCG.STA * 32 + OCG.mAbsX, 0);
+      OCG.gen1(OCG.STA * 32 + OCG.mDPIndL, RegAddr(x.r));
       IF isByte THEN Set16(TRUE, TRUE) END;
       RH := RH - 3
     END
@@ -3174,8 +3189,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       RH := RH - 1
     ELSE
       loadAdr(x); zr := RH; Set16(TRUE, TRUE);
-      OCG.gen1(OCG.LDX * 32 + OCG.mDP, RegAddr(x.r));
-      OCG.gen1(OCG.LDA * 32 + OCG.mAbsX, 0);
+      OCG.gen1(OCG.LDA * 32 + OCG.mDPIndL, RegAddr(x.r));   (* [address, bank] *)
       OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(zr));
       incR;
       IF y.mode = ORB.Const THEN
@@ -3202,9 +3216,8 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         END;
         OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(zr)); RH := RH - 1
       END;
-      OCG.gen1(OCG.LDX * 32 + OCG.mDP, RegAddr(x.r));
       OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(zr));
-      OCG.gen1(OCG.STA * 32 + OCG.mAbsX, 0);
+      OCG.gen1(OCG.STA * 32 + OCG.mDPIndL, RegAddr(x.r));
       RH := RH - 3
     END
   END Include;
