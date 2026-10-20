@@ -392,7 +392,8 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
           END;
           IF ~done THEN
             IF x.type.form = ORB.Pointer THEN
-              ORG.DeRef(x); x.type := x.type.base; wasPtr := TRUE
+              ORG.DeRef(x); x.type := x.type.base; wasPtr := TRUE;
+              x.rdo := FALSE   (* the record pointed to, not the pointer variable *)
             END;
             IF x.type.form = ORB.Record THEN
               obj := ORB.thisfield(x.type);
@@ -424,7 +425,8 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
       ELSIF sym = ORS.arrow THEN
         ORS.Get(sym);
         IF x.type.form = ORB.Pointer THEN
-          ORG.DeRef(x); x.type := x.type.base
+          ORG.DeRef(x); x.type := x.type.base;
+          x.rdo := FALSE   (* the record pointed to, not the pointer variable *)
         ELSE ORS.Mark("not a pointer")
         END
       ELSIF (sym = ORS.lparen) &
