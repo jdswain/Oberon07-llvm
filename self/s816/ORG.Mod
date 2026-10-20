@@ -1838,7 +1838,10 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       ELSIF (y.mode = ORB.Const) & (y.a >= 2) & (log2(y.a, e) = 1) THEN
         IF IsLong(x.type) THEN load(x); longAsr(x.r, e)
         ELSE
-          load(x); i := 0;
+          (* A is not x after load(x) when x is already in a register, a
+             procedure's result for one: load it *)
+          load(x); Set16(TRUE, TRUE); i := 0;
+          OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(x.r));
           WHILE i < e DO
             OCG.gen1(OCG.CMP * 32 + OCG.mImm, 8000H);
             OCG.gen1(OCG.ROR * 32 + OCG.mImpl, 0);
@@ -3518,6 +3521,17 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     END
   END Len;
 
+  (* The result of x op y, in A, into the lower of x's and y's registers,
+     those above it freed. x is not always below y: a constant x is loaded
+     only here, after y's registers (a pointer and its bank for r.f) were
+     taken, so RH - 2 and "free the top one" do not hold. *)
+  PROCEDURE binResult(VAR x, y: Item);
+  BEGIN
+    IF y.r < x.r THEN x.r := y.r END;
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(x.r));
+    RH := x.r + 1
+  END binResult;
+
   PROCEDURE Shift*(fct: LONGINT; VAR x, y: Item);
     VAR op, i, L: LONGINT;
   BEGIN
@@ -3547,7 +3561,8 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       OCG.gen1(op * 32 + OCG.mDP, RegAddr(x.r));           (* value shifted once *)
       OCG.gen1(OCG.DEC * 32 + OCG.mDP, RegAddr(y.r));      (* count-- (sets Z) *)
       OCG.gen1(OCG.BNE * 32 + OCG.mPCR, L);                (* repeat while # 0 *)
-      RH := RH - 1                                     (* free the count reg *)
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(x.r));
+      binResult(x, y)
     END
   END Shift;
 
@@ -3567,8 +3582,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       load(y);
       OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(y.r));
       OCG.gen1(op * 32 + OCG.mDP, RegAddr(x.r));
-      OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH - 2));
-      RH := RH - 1; x.r := RH - 1
+      binResult(x, y)
     END
   END Bitwise;
 

@@ -390,11 +390,31 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
       END
     ELSIF decl THEN
       IF obj.type.form = NoTyp THEN ORS.Mark("mult def")
-      ELSE ORS.Mark("invalid import order")
+      ELSIF (key # 0) & (obj.val # key) THEN ORS.Mark("inconsistent import")
+      ELSE
+        (* imported indirectly, by an earlier import's symbol file, and now
+           directly: the same module, its number kept; Import adds the rest
+           of its objects, unifying its types with those already read *)
+        CopyStr(obj.name, name); obj.type := noType
       END
     END;
     RETURN obj
   END ThisModule;
+
+  (* t, just read from a module's own symbol file, is t0 already read for
+     it from another's: t0 in its place in typtab, and in t's bases *)
+  PROCEDURE Unify(t, t0: Type; thismod: Object);
+    VAR i: INTEGER; obj: Object;
+  BEGIN
+    IF (t # t0) & (t # NIL) & (t0 # NIL) & (t.form = t0.form) THEN
+      FOR i := 0 TO maxTypTab - 1 DO IF typtab[i] = t THEN typtab[i] := t0 END END;
+      obj := thismod.dsc;
+      WHILE obj # NIL DO IF obj.type = t THEN obj.type := t0 END; obj := obj.next END;
+      IF (t.form = Pointer) OR (t.form = Array) OR (t.form = Record) THEN
+        Unify(t.base, t0.base, thismod)
+      END
+    END
+  END Unify;
 
   (* ----- .smb primitives ----- *)
 
@@ -574,7 +594,7 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
   PROCEDURE Import*(modid, modid1: ARRAY OF CHAR);
     VAR key: INTEGER;
       class, k: INTEGER;
-      obj: Object;
+      obj, old: Object;
       t: Type;
       thismod: Object;
       modname: ORS.Ident;
@@ -601,6 +621,9 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
           InType(R, thismod, obj.type);
           obj.lev := -thismod.lev;
           IF class = Typ THEN
+            old := thismod.dsc;   (* the type read before, indirectly *)
+            WHILE (old # NIL) & ((old.class # Typ) OR (old.name # obj.name)) DO old := old.next END;
+            IF old # NIL THEN Unify(obj.type, old.type, thismod); obj.type := old.type END;
             t := obj.type; t.typobj := obj;
             Read(R, k);
             WHILE k # 0 DO  (*fixup bases of previously declared pointer types*)
