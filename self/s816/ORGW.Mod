@@ -60,7 +60,8 @@ MODULE ORGW; (* 65C816 .816 module serializer — companion to ORG.
   PROCEDURE FindPtrs(VAR R: Files.Rider; typ: ORB.Type; adr: LONGINT);
     VAR fld: ORB.Object; i, s: LONGINT;
   BEGIN
-    IF (typ.form = ORB.Pointer) OR (typ.form = ORB.NilTyp)
+    IF (typ.form = ORB.Pointer) & typ.weak THEN   (* WEAK: not traced *)
+    ELSIF (typ.form = ORB.Pointer) OR (typ.form = ORB.NilTyp)
         OR (typ.form = ORB.Intfc) THEN   (* an interface value's object: its first 4 bytes *)
       Write4(R, adr)
     ELSIF typ.form = ORB.Record THEN

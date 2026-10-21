@@ -1296,7 +1296,8 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   PROCEDURE FindPtrFlds(typ: ORB.Type; off: LONGINT; VAR dcw: LONGINT);
     VAR fld: ORB.Object; i, s: LONGINT;
   BEGIN
-    IF (typ.form = ORB.Pointer) OR (typ.form = ORB.NilTyp)
+    IF (typ.form = ORB.Pointer) & typ.weak THEN   (* WEAK: not traced *)
+    ELSIF (typ.form = ORB.Pointer) OR (typ.form = ORB.NilTyp)
         OR (typ.form = ORB.Intfc) THEN   (* an interface value's object: its first 4 bytes *)
       wa.data[dcw] := off; dcw := dcw + 1
     ELSIF typ.form = ORB.Record THEN
