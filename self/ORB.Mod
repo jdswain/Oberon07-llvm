@@ -363,14 +363,18 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
     RETURN F
   END FindSymbolFile;
 
+  (* The modules are at the head of the module scope's list, in the order of
+     their numbers (the .816's import list is written so): a module found
+     there, or a new one put after the last of them. *)
   PROCEDURE ThisModule(name, orgname: ARRAY OF CHAR; decl: BOOLEAN; key: LONGINT): Object;
     VAR mod: Module;
-      obj, obj1: Object;
+      obj, obj1, rest: Object;
   BEGIN
     obj1 := topScope; obj := obj1.next;
-    WHILE (obj # NIL) & (obj(Module).orgname # orgname) DO
+    WHILE (obj # NIL) & (obj.class = Mod) & (obj(Module).orgname # orgname) DO
       obj1 := obj; obj := obj1.next
     END;
+    IF (obj # NIL) & (obj.class # Mod) THEN rest := obj; obj := NIL ELSE rest := NIL END;
     IF obj = NIL THEN
       (* new module, search for alias *)
       obj := topScope.next;
@@ -379,7 +383,7 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
         NEW(mod); mod.class := Mod; mod.rdo := FALSE;
         CopyStr(mod.name, name); CopyStr(mod.orgname, orgname);
         mod.val := key; mod.lev := nofmod; INC(nofmod);
-        mod.dsc := NIL; mod.next := NIL;
+        mod.dsc := NIL; mod.next := rest;
         IF decl THEN mod.type := noType ELSE mod.type := nilType END;
         obj1.next := mod; obj := mod
       ELSIF decl THEN
@@ -868,6 +872,17 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
       Files.Register(F); Files.Close(F)
     END
   END Export;
+
+  (* An import the source does not name, made where the compiler needs it
+     (HeapManager, for NEW): imported as if it were in the import list. *)
+  PROCEDURE ImportLate*(modid: ARRAY OF CHAR);
+    VAR s: Object;
+  BEGIN
+    s := topScope;
+    WHILE topScope.dsc # universe DO topScope := topScope.dsc END;
+    Import(modid, modid);
+    topScope := s
+  END ImportLate;
 
   (* ----- initialisation ----- *)
 

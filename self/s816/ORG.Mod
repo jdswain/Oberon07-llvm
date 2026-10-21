@@ -2416,8 +2416,8 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         OCG.gen1(OCG.LDY * 32 + OCG.mImm, 0);
         OCG.gen1(OCG.LDX * 32 + OCG.mImm, wordCount);
         loopTop := OCG.Here();
-        OCG.gen1(OCG.LDA * 32 + OCG.mDPIndY, srcReg);
-        OCG.gen1(OCG.STA * 32 + OCG.mDPIndY, dstReg);
+        OCG.gen1(OCG.LDA * 32 + OCG.mDPIndLY, srcReg);   (* [dp],Y: the pointers' banks *)
+        OCG.gen1(OCG.STA * 32 + OCG.mDPIndLY, dstReg);
         OCG.Iny;
         OCG.Iny;
         OCG.Dex;
@@ -2436,8 +2436,8 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         OCG.gen1(OCG.BEQ * 32 + OCG.mPCR, OCG.Here() + 14);  (* empty -> skip loop *)
         OCG.gen1(OCG.LDY * 32 + OCG.mImm, 0);
         loopTop := OCG.Here();
-        OCG.gen1(OCG.LDA * 32 + OCG.mDPIndY, srcReg);
-        OCG.gen1(OCG.STA * 32 + OCG.mDPIndY, dstReg);
+        OCG.gen1(OCG.LDA * 32 + OCG.mDPIndLY, srcReg);   (* [dp],Y: the pointers' banks *)
+        OCG.gen1(OCG.STA * 32 + OCG.mDPIndLY, dstReg);
         OCG.Iny;
         OCG.Iny;
         OCG.Dex;
@@ -2459,8 +2459,8 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     Set8(TRUE, FALSE); Set16(FALSE, TRUE);
     OCG.gen1(OCG.LDY * 32 + OCG.mImm, 0);
     loopStart := OCG.Here();
-    OCG.gen1(OCG.LDA * 32 + OCG.mDPIndY, RegAddr(y.r));
-    OCG.gen1(OCG.STA * 32 + OCG.mDPIndY, RegAddr(x.r));
+    OCG.gen1(OCG.LDA * 32 + OCG.mDPIndY, RegAddr(y.r));    (* the string, in the module's data *)
+    OCG.gen1(OCG.STA * 32 + OCG.mDPIndLY, RegAddr(x.r));  (* [dp],Y: x's bank *)
     OCG.gen1(OCG.BEQ * 32 + OCG.mPCR, OCG.Here() + 2 + 3);
     OCG.Iny;
     OCG.gen1(OCG.BRA * 32 + OCG.mPCR, loopStart);
@@ -3249,15 +3249,19 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     OCG.gen1(OCG.STZ * 32 + OCG.mDP, RegAddr(tag + 1))
   END emitTag;
 
-  PROCEDURE New*(VAR x: Item);
-    VAR baseType: ORB.Type; y, z, px, argSz, argTd: Item;
-        allocObj: ORB.Object; tagReg, objm4Reg, rx: LONGINT;
+  (* obj := HeapManager.Alloc(size, 0), its type tag written at [obj-4] (the
+     [obj-4] contract): the object in registers obj.r, obj.r + 1. NEW and
+     constructors allocate only so: a module that does not import
+     HeapManager imports it here. FALSE (and an error) without its symbol
+     file. *)
+  PROCEDURE HeapNew(baseType: ORB.Type; VAR px: Item): BOOLEAN;
+    VAR argSz, argTd: Item; allocObj: ORB.Object; tagReg, objm4Reg, rx: LONGINT; ok: BOOLEAN;
   BEGIN
-    baseType := x.type.base; y := x;
     allocObj := ORB.FindImport("HeapManager", "Alloc");
-    IF allocObj # NIL THEN
-      (* opt-in path: obj := HeapManager.Alloc(recSize, 0); then write the type
-         tag at [obj-4] (the [obj-4] contract) and store obj into the pointer *)
+    IF allocObj = NIL THEN ORB.ImportLate("HeapManager"); allocObj := ORB.FindImport("HeapManager", "Alloc") END;
+    ok := allocObj # NIL;
+    IF ~ok THEN ORS.Mark("NEW needs HeapManager (its symbol file)")
+    ELSE
       MakeItem(px, allocObj, 0);
       PrepCall(px, rx);
       MakeConstItem(argSz, ORB.intType, baseType.size); ValueParam(argSz, ORB.longType);
@@ -3278,37 +3282,16 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       OCG.gen1(OCG.LDY * 32 + OCG.mImm, 2);
       OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(tagReg + 1));
       OCG.gen1(OCG.STA * 32 + OCG.mDPIndLY, RegAddr(objm4Reg));
-      RH := tagReg;                       (* free the two temp pairs *)
-      z := px; z.type := y.type; Store(y, z)
-    ELSE
-      (* default: BRK #10 syscall (em16 heap). block = size+4, tag at block[0],
-         obj = block+4. *)
-      Set16(TRUE, TRUE);
-      tagReg := GetSB(-baseType.mno);
-      OCG.gen1(OCG.LDA * 32 + OCG.mDP, tagReg);
-      OCG.Clc;
-      emitTDLen(baseType);
-      OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH));
-      OCG.gen1(OCG.STZ * 32 + OCG.mDP, RegAddr(RH + 1));
-      incR; incR;
-      OCG.gen1(OCG.LDA * 32 + OCG.mImm, baseType.size + 4);
-      OCG.gen1(OCG.BRK * 32 + OCG.mImm, 10);
-      OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH));
-      OCG.gen1(OCG.STX * 32 + OCG.mDP, RegAddr(RH + 1));
-      OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(RH - 2));
-      OCG.gen1(OCG.STA * 32 + OCG.mDPIndL, RegAddr(RH));
-      OCG.gen1(OCG.LDY * 32 + OCG.mImm, 2);
-      OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(RH - 1));
-      OCG.gen1(OCG.STA * 32 + OCG.mDPIndLY, RegAddr(RH));
-      OCG.Clc;
-      OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(RH));
-      OCG.gen1(OCG.ADC * 32 + OCG.mImm, 4);
-      OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH));
-      z.r := RH; z.mode := Reg; z.type := y.type;
-      incR; incR;
-      Store(y, z);
-      RH := RH - 2
+      RH := tagReg                        (* free the two temp pairs *)
     END
+  RETURN ok
+  END HeapNew;
+
+  PROCEDURE New*(VAR x: Item);
+    VAR baseType: ORB.Type; y, z, px: Item;
+  BEGIN
+    baseType := x.type.base; y := x;
+    IF HeapNew(baseType, px) THEN z := px; z.type := y.type; Store(y, z) END
   END New;
 
   PROCEDURE Pack*(VAR x, y: Item);
@@ -3579,15 +3562,38 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     END
   END Shift;
 
+  (* AND, EOR, ORA; of a LONGINT x both words (an INTEGER y sign-extended),
+     the result in the lower of the two register pairs *)
   PROCEDURE Bitwise*(fct: LONGINT; VAR x, y: Item);
-    VAR op: LONGINT;
+    VAR op, dst: LONGINT;
   BEGIN
     load(x);
     IF fct = 0 THEN op := OCG.AND
     ELSIF fct = 1 THEN op := OCG.EOR
     ELSE op := OCG.ORA
     END;
-    IF y.mode = ORB.Const THEN
+    IF IsLong(x.type) THEN
+      Set16(TRUE, TRUE);
+      IF y.mode = ORB.Const THEN
+        OCG.gen1(OCG.LDA * 32 + OCG.mImm, Lo16(y.a));
+        OCG.gen1(op * 32 + OCG.mDP, RegAddr(x.r));
+        OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(x.r));
+        OCG.gen1(OCG.LDA * 32 + OCG.mImm, Hi16(y.a));
+        OCG.gen1(op * 32 + OCG.mDP, RegAddr(x.r + 1));
+        OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(x.r + 1))
+      ELSE
+        load(y);
+        IF ~IsLong(y.type) THEN cvt(y, TRUE) END;
+        IF y.r < x.r THEN dst := y.r ELSE dst := x.r END;
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(y.r));
+        OCG.gen1(op * 32 + OCG.mDP, RegAddr(x.r));
+        OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(dst));
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(y.r + 1));
+        OCG.gen1(op * 32 + OCG.mDP, RegAddr(x.r + 1));
+        OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(dst + 1));
+        x.r := dst; RH := dst + 2
+      END
+    ELSIF y.mode = ORB.Const THEN
       OCG.gen1(OCG.LDA * 32 + OCG.mImm, Lo16(y.a));
       OCG.gen1(op * 32 + OCG.mDP, RegAddr(x.r));
       OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(x.r))
@@ -3808,40 +3814,21 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     END
   END MethodItem;
 
-  (* T.Name(args) constructor: allocate a fresh instance of rec (BRK #10 +
-     tag header, like New), keep it in registers as the receiver, and set x
+  (* T.Name(args) constructor: allocate a fresh instance of rec (HeapNew,
+     as New), keep it in registers as the receiver, and set x
      to a direct call to the init body m. The init returns the receiver. *)
   PROCEDURE InitItem*(VAR x: Item; m: ORB.Object; rec: ORB.Type);
-    VAR rh0, sb: LONGINT;
+    VAR rh0: LONGINT; obj: Item;
   BEGIN
     rh0 := RH;
-    Set16(TRUE, TRUE);
-    sb := GetSB(-rec.mno);
-    OCG.gen1(OCG.LDA * 32 + OCG.mDP, sb);
-    OCG.Clc;
-    emitTDLen(rec);
-    OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH));
-    OCG.gen1(OCG.STZ * 32 + OCG.mDP, RegAddr(RH + 1));
-    incR; incR;
-    OCG.gen1(OCG.LDA * 32 + OCG.mImm, rec.size + 4);
-    OCG.gen1(OCG.BRK * 32 + OCG.mImm, 10);
-    OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH));
-    OCG.gen1(OCG.STX * 32 + OCG.mDP, RegAddr(RH + 1));
-    OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(RH - 2));
-    OCG.gen1(OCG.STA * 32 + OCG.mDPIndL, RegAddr(RH));
-    OCG.gen1(OCG.LDY * 32 + OCG.mImm, 2);
-    OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(RH - 1));
-    OCG.gen1(OCG.STA * 32 + OCG.mDPIndLY, RegAddr(RH));
-    OCG.Clc;
-    OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(RH));
-    OCG.gen1(OCG.ADC * 32 + OCG.mImm, 4);
-    OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH));
-    (* object is now at [rh0+2, rh0+3]; move it over the dead tag registers to
-       [rh0, rh0+1] so PrepCall only saves the genuine outer context *)
-    OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(RH));
-    OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(rh0));
-    OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(RH + 1));
-    OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(rh0 + 1));
+    IF HeapNew(rec, obj) & (obj.r # rh0) THEN
+      (* the object over the registers it started from, so PrepCall only
+         saves the genuine outer context *)
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(obj.r));
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(rh0));
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(obj.r + 1));
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(rh0 + 1))
+    END;
     RH := rh0 + 2;
     x.rcvMode := Reg; x.rcvR := rh0; x.rcvType := rec;
     x.isMeth := TRUE; x.dynDisp := FALSE; x.type := m.type;
