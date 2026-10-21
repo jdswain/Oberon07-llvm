@@ -444,7 +444,24 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   PROCEDURE load(VAR x: Item);
     VAR perAddr, perOp, mno, exno, encoded, sb, falseChain, skip: LONGINT; i: INTEGER;
   BEGIN
-    IF (x.mode # Reg) & (x.type # NIL) & (x.type.form = ORB.Intfc) THEN
+    IF (x.mode = RegI) & (x.type # NIL) & (x.type.form = ORB.Intfc) THEN
+      (* through a pointer (a field of a heap object, an element): the 4
+         words to free registers, then down over the pointer *)
+      Set16(TRUE, TRUE); i := 0;
+      WHILE i < 4 DO
+        OCG.gen1(OCG.LDY * 32 + OCG.mImm, x.a + i * 2);
+        OCG.gen1(OCG.LDA * 32 + OCG.mDPIndLY, RegAddr(x.r));
+        OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH + i));
+        INC(i)
+      END;
+      i := 0;
+      WHILE i < 4 DO
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(RH + i));
+        OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(x.r + i));
+        INC(i)
+      END;
+      x.mode := Reg; RH := x.r; incR; incR; incR; incR
+    ELSIF (x.mode # Reg) & (x.type # NIL) & (x.type.form = ORB.Intfc) THEN
       (* fat value {data, itable}: 4 words from the designator *)
       loadIfacePair(x.mode, x.a, x.b, x.r, 0, RH);
       loadIfacePair(x.mode, x.a, x.b, x.r, 4, RH + 2);
@@ -1275,7 +1292,8 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   PROCEDURE FindPtrFlds(typ: ORB.Type; off: LONGINT; VAR dcw: LONGINT);
     VAR fld: ORB.Object; i, s: LONGINT;
   BEGIN
-    IF (typ.form = ORB.Pointer) OR (typ.form = ORB.NilTyp) THEN
+    IF (typ.form = ORB.Pointer) OR (typ.form = ORB.NilTyp)
+        OR (typ.form = ORB.Intfc) THEN   (* an interface value's object: its first 4 bytes *)
       wa.data[dcw] := off; dcw := dcw + 1
     ELSIF typ.form = ORB.Record THEN
       fld := typ.dsc;
@@ -3930,16 +3948,26 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         OCG.gen1(OCG.LDY * 32 + OCG.mImm, x.a + k * 2);
         OCG.gen1(OCG.STA * 32 + OCG.mDPIndY, sb);
         k := k + 1
-      END
+      END;
+      RH := y.r
+    ELSIF x.mode = RegI THEN   (* through a pointer: a field of a heap object, an element *)
+      k := 0;
+      WHILE k < 4 DO
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(y.r + k));
+        OCG.gen1(OCG.LDY * 32 + OCG.mImm, x.a + k * 2);
+        OCG.gen1(OCG.STA * 32 + OCG.mDPIndLY, RegAddr(x.r));
+        k := k + 1
+      END;
+      RH := x.r
     ELSE   (* local Var or Par: stack-frame relative *)
       k := 0;
       WHILE k < 4 DO
         OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(y.r + k));
         OCG.gen1(OCG.STA * 32 + OCG.mSR, x.a + k * 2 + frame);
         k := k + 1
-      END
-    END;
-    RH := y.r
+      END;
+      RH := y.r
+    END
   END StoreIface;
 
   (* = / # on interface values: compare the data words (word 0). One side may
