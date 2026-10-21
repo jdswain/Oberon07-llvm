@@ -864,6 +864,18 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     RH := RH - 2; x.r := d; x.mode := Reg; x.type := ORB.longType
   END longCall;
 
+  (* reg := the stack's bank, D's high byte: the board's banked direct page
+     and stack (WDM #$B1) put the stack in that bank; unbanked, D is 0 (the
+     boot ROM), and so is the bank. A local variable's address goes with it. *)
+  PROCEDURE stackBank(reg: LONGINT);
+  BEGIN
+    Set16(TRUE, TRUE);
+    OCG.gen1(OCG.TDC * 32 + OCG.mImpl, 0);
+    OCG.Xba;
+    OCG.gen1(OCG.AND * 32 + OCG.mImm, 0FFH);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(reg))
+  END stackBank;
+
   PROCEDURE loadAdr(VAR x: Item);
     VAR sb: LONGINT;
   BEGIN
@@ -874,7 +886,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         OCG.Clc;
         OCG.gen1(OCG.ADC * 32 + OCG.mImm, x.a + frame);
         OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH));
-        OCG.gen1(OCG.STZ * 32 + OCG.mDP, RegAddr(RH + 1))
+        stackBank(RH + 1)
       ELSE
         sb := GetSB(x.r);
         Set16(TRUE, TRUE);
@@ -1143,7 +1155,9 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
           OCG.gen1(OCG.ADC * 32 + OCG.mDP, RegAddr(y.r));
           OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(y.r))
         END;
-        OCG.gen1(OCG.STZ * 32 + OCG.mDP, RegAddr(RH));
+        IF x.r > 0 THEN stackBank(RH)   (* a local: the stack's bank *)
+        ELSE OCG.gen1(OCG.STZ * 32 + OCG.mDP, RegAddr(RH))
+        END;
         x.a := 0; x.r := y.r; x.mode := RegI; incR
       ELSIF x.mode = ORB.Par THEN
         Set16(TRUE, TRUE);
@@ -2494,8 +2508,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       OCG.gen1(OCG.ADC * 32 + OCG.mImm, x.a + frame);
       OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH));
       x.r := RH; x.mode := Reg; incR;
-      OCG.gen1(OCG.LDA * 32 + OCG.mImm, 0);
-      OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH));
+      stackBank(RH);
       incR
     ELSIF (x.mode = ORB.Var) & (x.r <= 0) THEN
       sb := GetSB(x.r);
