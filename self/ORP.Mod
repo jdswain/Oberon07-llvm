@@ -121,8 +121,9 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
   BEGIN xt := x.type;
     IF (xt.form = ORB.Intfc) & (T.form = ORB.Pointer) &
        (T.base # NIL) & (T.base.form = ORB.Record) THEN
-      (* narrowing an interface reference (DDR-008 §5.4): ordinary tag test *)
-      ORG.TypeTest(x, T, FALSE, guard);
+      (* narrowing an interface reference (DDR-008 §5.4): ordinary tag test,
+         as of a pointer: against the record's descriptor *)
+      ORG.TypeTest(x, T.base, FALSE, guard);
       IF guard THEN x.type := T ELSE x.type := ORB.boolType END
     ELSIF (T.form = xt.form) &
        ((T.form = ORB.Pointer) OR ((T.form = ORB.Record) & (x.mode = ORB.Par))) THEN

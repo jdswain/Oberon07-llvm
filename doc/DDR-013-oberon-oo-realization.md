@@ -26,7 +26,7 @@ All of the following are implemented, parsed via the keywords `WEAK INIT OVERRID
 
 Two decisions from DDR-008 §6 were resolved during implementation and are now fixed:
 
-- **Vtable dispatch.** Each record type descriptor (TD) carries `[size][3 ancestors][nofmeth][vtable slots…][ptr-map]`. Dynamic dispatch is `receiver → tag(=[obj−hdr]) → vtable[slot]`. Slots hold the method's address; the mechanism for *producing* that address differs per backend (§4).
+- **Vtable dispatch.** Each record type descriptor (TD) carries `[size][3 ancestors][nofmeth][vtable slots…][ptr-map]` (oc816: 4 ancestors, levels 0–3 with the type itself at its own level, as Wirth's, so that an interface value can be narrowed to a base record). Dynamic dispatch is `receiver → tag(=[obj−hdr]) → vtable[slot]`. Slots hold the method's address; the mechanism for *producing* that address differs per backend (§4).
 - **Interfaces are fat pointers `{data, itable}`.** `data` is the object pointer; `itable` points at a per-`(record, interface)` constant table of **vtable slot indices** — not function pointers. Dispatch is `data → tag → vtable[ itable[k] ]`: two indexed loads, no search. Because slot indices are position-independent, one itable serves every extension and every module, and `pointer → interface` conversion is a compile-time constant. Sizes: `IntfcSize = 16` on LLVM (two native pointers), `8` on the 816 (addr+bank ×2). The full rationale is DDR-008 §6 (resolution note).
 
 ## 4. Realized ABI — the two backends

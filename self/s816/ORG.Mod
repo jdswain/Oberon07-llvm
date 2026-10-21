@@ -45,8 +45,8 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     maxVtFix = 512;        (* max vtable-slot loader fixups per module *)
     maxItab = 128;         (* max distinct (record,interface) itables per module *)
     maxItabRef = 256;      (* max PtrToIface conversion sites per module *)
-    VtableOff = 16;        (* byte offset of vtable[0] in a TD: size(2) +
-                              3 ancestors(12) + nofmeth(2). Each slot is 4 bytes,
+    VtableOff = 20;        (* byte offset of vtable[0] in a TD: size(2) +
+                              4 ancestors(16), levels 0-3 + nofmeth(2). Each slot is 4 bytes,
                               the method's address and its bank (v3), filled by the
                               loader: modules are not all in one bank. *)
     SlotSize = 4;
@@ -1278,15 +1278,19 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   END DeRef;
 
   (* --- type descriptors --- *)
+  (* T's ancestors from level 0 (the base record) to T itself, as Wirth's:
+     an object's type tests at any level, its own included, read the entry
+     of that level *)
   PROCEDURE Q(T: ORB.Type; VAR dcw: LONGINT);
   BEGIN
-    IF T.base # NIL THEN
-      Q(T.base, dcw);
-      wa.data[dcw] := T.len; wa.data[dcw + 1] := 0;
+    IF T.base # NIL THEN Q(T.base, dcw) END;
+    wa.data[dcw] := T.len; wa.data[dcw + 1] := 0;
+    IF tdFixupC >= LEN(wa.tdFixupOff) THEN ORS.Mark("too many type descriptor fixups")
+    ELSE
       wa.tdFixupOff[tdFixupC] := tdBase + dcw * 2; wa.tdFixupMno[tdFixupC] := T.mno;
-      tdFixupC := tdFixupC + 1;
-      dcw := dcw + 2
-    END
+      tdFixupC := tdFixupC + 1
+    END;
+    dcw := dcw + 2
   END Q;
 
   PROCEDURE FindPtrFlds(typ: ORB.Type; off: LONGINT; VAR dcw: LONGINT);
@@ -1385,8 +1389,8 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       k := T.nofpar;
       IF k > 3 THEN ORS.Mark("ext level too large")
       ELSE
-        Q(T, dcw);
-        WHILE k < 3 DO
+        Q(T, dcw); k := k + 1;
+        WHILE k < 4 DO
           wa.data[dcw] := 0FFFFH; wa.data[dcw + 1] := 0FFFFH;
           dcw := dcw + 2; k := k + 1
         END
@@ -1480,7 +1484,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH - 2));
       OCG.gen1(OCG.LDA * 32 + OCG.mSR, x.a + 6 + frame);
       OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH - 1));
-      offset := 2 + (T.nofpar - 1) * 4;
+      offset := 2 + T.nofpar * 4;
       OCG.Clc;
       OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(RH - 2));
       OCG.gen1(OCG.ADC * 32 + OCG.mImm, offset);
@@ -1511,6 +1515,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       END
     ELSE
       load(x);
+      IF x.type.form = ORB.Intfc THEN RH := x.r + 2 END;   (* the object; the itable dropped *)
       Set16(TRUE, TRUE);
       OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(x.r));
       OCG.gen1(OCG.ORA * 32 + OCG.mDP, RegAddr(x.r + 1));
@@ -1530,7 +1535,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH - 1));
       OCG.Pla;
       OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH - 2));
-      offset := 2 + (T.nofpar - 1) * 4;
+      offset := 2 + T.nofpar * 4;
       OCG.Clc;
       OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(RH - 2));
       OCG.gen1(OCG.ADC * 32 + OCG.mImm, offset);
