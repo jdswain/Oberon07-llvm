@@ -3544,7 +3544,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   PROCEDURE Len*(VAR x: Item);
   BEGIN
     IF x.type.len >= 0 THEN
-      IF x.mode = RegI THEN RH := RH - 1 END;
+      IF x.mode = RegI THEN RH := x.r END;   (* the address and its bank, both *)
       x.mode := ORB.Const; x.a := x.type.len
     ELSE
       Set16(TRUE, TRUE);
