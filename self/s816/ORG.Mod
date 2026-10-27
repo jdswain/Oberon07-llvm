@@ -74,6 +74,10 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     END;
 
   VAR
+    mapOn*: BOOLEAN;     (* -m: Module.map, each procedure's code offset and name *)
+    mapN: INTEGER;
+    mapOff: ARRAY 1500 OF LONGINT;
+    mapName: ARRAY 1500 OF ARRAY 64 OF CHAR;
     varsize: LONGINT;    (* = ORG_varsize; set by SetDataSize *)
     tdx, strx, entry, RH, frame: LONGINT;
     fixorgP, fixorgD, fixorgT: LONGINT;
@@ -2968,10 +2972,28 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   (* --- procedure entry / exit --- *)
   (* Shared-frontend signature: (proc, params, parblksize, locblksize,
      intProc). frame_size = parblksize + locblksize; expo = proc.expo. *)
+  (* the procedure starting here, for the map: Type.Name for a method *)
+  PROCEDURE MapProc(proc, params: ORB.Object);
+    VAR t: ORB.Type; i, j: INTEGER;
+  BEGIN
+    IF mapOn & (mapN < LEN(mapOff)) THEN
+      mapOff[mapN] := OCG.Here(); i := 0;
+      IF (proc.class = ORB.Meth) & (params # NIL) THEN t := params.type;
+        IF (t.typobj = NIL) & (t.form = ORB.Pointer) THEN t := t.base END;
+        IF t.typobj # NIL THEN
+          j := 0; WHILE (t.typobj.name[j] # 0X) & (i < 40) DO mapName[mapN][i] := t.typobj.name[j]; INC(i); INC(j) END;
+          mapName[mapN][i] := "."; INC(i)
+        END
+      END;
+      j := 0; WHILE (proc.name[j] # 0X) & (i < 63) DO mapName[mapN][i] := proc.name[j]; INC(i); INC(j) END;
+      mapName[mapN][i] := 0X; INC(mapN)
+    END
+  END MapProc;
+
   PROCEDURE Enter*(proc, params: ORB.Object; parblksize, locblksize: LONGINT; intProc: BOOLEAN);
     VAR r, frameSize, n: LONGINT; param: ORB.Object;
       paramItem, regItem: Item;
-  BEGIN
+  BEGIN MapProc(proc, params);
     frameSize := parblksize + locblksize;
     (* Methods always use the far (RTL) convention: dynamic dispatch reaches
        them via a long call and the vtable demands ONE uniform convention
@@ -3728,7 +3750,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   BEGIN
     curModid := modid; largeMod := large;
     OCG.Init; OCG.SetLarge(large); OCG.SetPc(CodeOrg);
-    tdx := 0; strx := 0; RH := 0; forDepth := 0;
+    tdx := 0; strx := 0; RH := 0; forDepth := 0; mapN := 0;
     fixorgP := 0; fixorgD := 0; fixorgT := 0;
     tdFixupC := 0; tdListC := 0; tdRefC := 0; vtFixC := 0;
     itabC := 0; itabRefC := 0;
@@ -3748,6 +3770,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   PROCEDURE Header*;
   BEGIN
     entry := OCG.Here();
+    IF mapOn & (mapN < LEN(mapOff)) THEN mapOff[mapN] := entry; mapName[mapN] := "BEGIN"; INC(mapN) END;
     OCG.SetLongA(TRUE); OCG.SetLongI(TRUE);
     OCG.AddRel(OCG.Here());
     OCG.gen1(OCG.LDA * 32 + OCG.mImm, 0);
@@ -3763,9 +3786,30 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
      the module would be silently wrong. Mark instead so the compile fails
      cleanly (this is the clean-abort for an over-large module; the raw
      overflow used to run past the reloc array and segfault). *)
+  (* modid.map: a line for each procedure, its code offset in hex and its name *)
+  PROCEDURE WriteMap(modid: ARRAY OF CHAR);
+    VAR f: Files.File; r: Files.Rider; name: ARRAY 40 OF CHAR; hex: ARRAY 6 OF CHAR; i, k, d: INTEGER; v: LONGINT;
+  BEGIN
+    i := 0; WHILE (modid[i] # 0X) & (i < 32) DO name[i] := modid[i]; INC(i) END;
+    name[i] := "."; name[i + 1] := "m"; name[i + 2] := "a"; name[i + 3] := "p"; name[i + 4] := 0X;
+    f := Files.New(name); Files.Set(r, f, 0);
+    FOR k := 0 TO mapN - 1 DO
+      v := mapOff[k];
+      FOR i := 5 TO 0 BY -1 DO d := v MOD 16; v := v DIV 16;
+        IF d < 10 THEN hex[i] := CHR(ORD("0") + d) ELSE hex[i] := CHR(ORD("A") + d - 10) END
+      END;
+      FOR i := 0 TO 5 DO Files.Write(r, hex[i]) END;
+      Files.Write(r, " "); i := 0;
+      WHILE mapName[k][i] # 0X DO Files.Write(r, mapName[k][i]); INC(i) END;
+      Files.Write(r, 0AX)
+    END;
+    Files.Register(f)
+  END WriteMap;
+
   PROCEDURE Close*(modid: ARRAY OF CHAR; key: LONGINT; nofent: LONGINT);
     VAR wInfo: ORGW.ModInfo;
   BEGIN
+    IF mapOn THEN WriteMap(modid) END;
     IF ORGFP.Full() THEN ORS.Mark("too many REAL or LONGINT operations")
     ELSIF OCG.Faulted() THEN
       ORS.Mark("program too large: code or relocation table overflow")
