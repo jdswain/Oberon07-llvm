@@ -332,6 +332,17 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     END
   END emitBranch;
 
+  (* A branch on cond added to the forward chain L: the chain's new head,
+     the branch's offset. A branch never taken (NV, a constant condition:
+     WHILE TRUE, IF TRUE, TRUE & b, FALSE OR b) emits nothing, and the
+     chain stays as it is; its head is not the operand of the instruction
+     before, which the chain's fixup would overwrite. *)
+  PROCEDURE chain(cond: LONGINT; type: ORB.Type; L: LONGINT): LONGINT;
+  BEGIN
+    IF cond # NV THEN emitBranch(cond, type, OCG.mFix, L); L := OCG.Here() - 2 END;
+    RETURN L
+  END chain;
+
   (* fix a BRL fixup at 'at' (offset-lo-byte address) to target. *)
   PROCEDURE fix(at, target: LONGINT);
     VAR offset, ci: LONGINT;
@@ -719,8 +730,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         END
       ELSIF x.mode = Cond THEN
         Set16(TRUE, TRUE);   (* REP leaves the flags of the condition alone *)
-        emitBranch(negated(x.r), x.origType, OCG.mFix, x.a);
-        falseChain := OCG.Here() - 2;   (* BRL offset field = FALSE chain head *)
+        falseChain := chain(negated(x.r), x.origType, x.a);   (* the FALSE chain *)
         FixLink(x.b);                    (* TRUE path *)
         OCG.gen1(OCG.LDA * 32 + OCG.mImm, 1);
         OCG.gen1(OCG.BRA * 32 + OCG.mPCR, OCG.Here() + 2 + 3);
@@ -1581,8 +1591,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   PROCEDURE And1*(VAR x: Item);
   BEGIN
     IF x.mode # Cond THEN loadCond(x) END;
-    emitBranch(negated(x.r), x.origType, OCG.mFix, x.a);
-    x.a := OCG.Here() - 2;
+    x.a := chain(negated(x.r), x.origType, x.a);
     FixLink(x.b); x.b := 0
   END And1;
 
@@ -1595,8 +1604,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   PROCEDURE Or1*(VAR x: Item);
   BEGIN
     IF x.mode # Cond THEN loadCond(x) END;
-    emitBranch(x.r, x.origType, OCG.mFix, x.b);
-    x.b := OCG.Here() - 2;
+    x.b := chain(x.r, x.origType, x.b);
     FixLink(x.a); x.a := 0
   END Or1;
 
@@ -2704,9 +2712,8 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   PROCEDURE CFJump*(VAR x: Item);
   BEGIN
     IF x.mode # Cond THEN loadCond(x) END;
-    emitBranch(negated(x.r), x.origType, OCG.mFix, x.a);
-    FixLink(x.b);
-    x.a := OCG.Here() - 2
+    x.a := chain(negated(x.r), x.origType, x.a);
+    FixLink(x.b)
   END CFJump;
 
   PROCEDURE BJump*(L: LONGINT);
@@ -2961,7 +2968,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   (* Shared-frontend signature: (proc, params, parblksize, locblksize,
      intProc). frame_size = parblksize + locblksize; expo = proc.expo. *)
   PROCEDURE Enter*(proc, params: ORB.Object; parblksize, locblksize: LONGINT; intProc: BOOLEAN);
-    VAR r, frameSize: LONGINT; param: ORB.Object;
+    VAR r, frameSize, n: LONGINT; param: ORB.Object;
       paramItem, regItem: Item;
   BEGIN
     frameSize := parblksize + locblksize;
@@ -2997,8 +3004,12 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         OCG.gen1(OCG.SBC * 32 + OCG.mImm, frameSize);
         OCG.Tcs
       END;
-      r := 0; param := params; Set16(TRUE, TRUE);
-      WHILE (param # NIL) & ((param.class = ORB.Var) OR (param.class = ORB.Par)) DO
+      (* the parameters, from their registers to the frame: nofpar of them
+         (the receiver counted). params is the whole scope, the locals
+         after them, and a local is a Var too: not stored, garbage, and
+         with a big frame beyond d,S's reach *)
+      r := 0; param := params; n := proc.type.nofpar; Set16(TRUE, TRUE);
+      WHILE (param # NIL) & (n > 0) & ((param.class = ORB.Var) OR (param.class = ORB.Par)) DO
         IF (param.class = ORB.Par) & (param.type.form = ORB.Array) & (param.type.len < 0) THEN
           OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(r));
           OCG.gen1(OCG.STA * 32 + OCG.mSR, param.val);
@@ -3049,7 +3060,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         ELSIF param.type.size <= 2 THEN r := r + 1
         ELSE r := r + 2
         END;
-        param := param.next
+        param := param.next; DEC(n)
       END;
       RH := 0
     ELSE
@@ -3264,10 +3275,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     (* where the condition holds, branch over the trap; where it fails,
        fall or jump into it *)
     IF x.mode # Cond THEN loadCond(x) END;
-    IF x.r # NV THEN
-      emitBranch(x.r, x.origType, OCG.mFix, x.b);
-      x.b := OCG.Here() - 2
-    END;
+    x.b := chain(x.r, x.origType, x.b);
     FixLink(x.a);
     OCG.gen1(OCG.BRK * 32 + OCG.mImm, 7);
     FixLink(x.b)

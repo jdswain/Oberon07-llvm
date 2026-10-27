@@ -187,6 +187,30 @@ MODULE OCG; (* 65C816 instruction encoder.
   BEGIN RETURN (mode = mDP) OR (mode = mAbs) OR (mode = mPCR)
   END isBr;
 
+  (* A local beyond the reach of d,S (v > 255): X pushed, then X := its
+     offset from the direct page, for dp,X. With the banked direct page
+     and stack (WDM #$B1) both are in D's bank, the direct page at
+     Lo(D) * 100H, so X := S + v - Lo(D) * 100H and LDA $00,X reaches the
+     stack's bank, as a local's address does (ORG.stackBank). Not
+     $000000,X: that is bank 0, and the kernel's variables are there.
+     16-bit A, which is lost. *)
+  PROCEDURE bigX(v: LONGINT);
+  BEGIN
+    o(0DAH);                            (* PHX *)
+    o(7BH);                             (* TDC *)
+    o(29H); o(0FFH); o(0);              (* AND #$00FF *)
+    o(0EBH);                            (* XBA: Lo(D) * 100H *)
+    o(49H); o(0FFH); o(0FFH);           (* EOR #$FFFF *)
+    o(1AH);                             (* INC A: its negative *)
+    o(48H);                             (* PHA *)
+    o(3BH);                             (* TSC *)
+    o(18H);                             (* CLC *)
+    o(63H); o(1);                       (* ADC 1,S *)
+    o(69H); o(v + 4); o((v + 4) DIV 100H);   (* ADC #(v + 4): S was 4 more *)
+    o(0AAH);                            (* TAX *)
+    o(68H)                              (* PLA *)
+  END bigX;
+
   (* Large stack-relative CMP: value1 > 255 expands to a DP-temp sequence. *)
   PROCEDURE cmpBigSR(v: LONGINT);
     VAR save: BOOLEAN;
@@ -194,12 +218,8 @@ MODULE OCG; (* 65C816 instruction encoder.
     ob(85H, 22H);                       (* STA $22 *)
     save := longa;
     IF ~longa THEN o(0C2H); o(20H); longa := TRUE END;   (* REP #$20 *)
-    o(0DAH);                            (* PHX *)
-    o(3BH);                            (* TSC *)
-    o(18H);                            (* CLC *)
-    o(69H); o(v + 2); o((v + 2) DIV 100H);   (* ADC #(off+2) *)
-    o(0AAH);                            (* TAX *)
-    o(0BFH); o(0); o(0); o(0);         (* LDA $000000,X *)
+    bigX(v);
+    o(0B5H); o(0);                      (* LDA $00,X *)
     ob(85H, 24H);                       (* STA $24 *)
     o(0FAH);                            (* PLX *)
     IF ~save THEN o(0E2H); o(20H); longa := FALSE END;   (* SEP #$20 *)
@@ -212,12 +232,10 @@ MODULE OCG; (* 65C816 instruction encoder.
   BEGIN
     save := longa;
     IF ~longa THEN o(0C2H); o(20H); longa := TRUE END;
-    o(0DAH); o(3BH); o(18H);
-    o(69H); o(v + 2); o((v + 2) DIV 100H);
-    o(0AAH);
+    bigX(v);
     IF ~save THEN o(0E2H); o(20H); longa := FALSE END;
-    o(0BFH); o(0); o(0); o(0);
-    o(0FAH)
+    o(0B5H); o(0);                      (* LDA $00,X *)
+    o(0FAH)                             (* PLX *)
   END ldaBigSR;
 
   PROCEDURE staBigSR(v: LONGINT);
@@ -226,13 +244,11 @@ MODULE OCG; (* 65C816 instruction encoder.
     ob(85H, 42H);                       (* STA $42 *)
     save := longa;
     IF ~longa THEN o(0C2H); o(20H); longa := TRUE END;
-    o(0DAH); o(3BH); o(18H);
-    o(69H); o(v + 2); o((v + 2) DIV 100H);
-    o(0AAH);
+    bigX(v);
     IF ~save THEN o(0E2H); o(20H); longa := FALSE END;
     ob(0A5H, 42H);                      (* LDA $42 *)
-    o(9FH); o(0); o(0); o(0);          (* STA $000000,X *)
-    o(0FAH)
+    o(95H); o(0);                       (* STA $00,X *)
+    o(0FAH)                             (* PLX *)
   END staBigSR;
 
   (* gen_816: emit one instruction. Faithful transcription. *)
