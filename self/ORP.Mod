@@ -1271,7 +1271,7 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
       ELSIF sym < ORS.semicolon THEN
         ORS.Mark("missing semicolon?"); ORS.Get(sym)
       END
-    UNTIL sym > ORS.semicolon
+    UNTIL (sym > ORS.semicolon) & (sym # ORS.super)   (* SUPER's token is past them, and starts a statement *)
   END StatSequence;
 
   (* types and declarations *)

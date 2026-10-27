@@ -15,7 +15,8 @@ MODULE ORGW; (* 65C816 .816 module serializer — companion to ORG.
     (* array caps — MUST stay equal to ORG's maxStrx/maxTD/maxVtFix: ORG owns
        the ModArrays variable and its bounds checks use those consts. *)
     maxStrx = 16000; maxTD = 160; maxVtFix = 512;
-    maxTDFix = 640;   (* 4 * maxTD: a descriptor's 4 ancestors *)
+    maxTDW = 2000;    (* the descriptors' words: ancestors, vtables, itables, pointer maps *)
+    maxTDFix = 1280;  (* 8 * maxTD: a descriptor's 8 ancestors (ORG.ExtLevels) *)
 
   TYPE
     (* ORG's finalized module-image scalars, snapshotted by ORG.Close *)
@@ -30,7 +31,7 @@ MODULE ORGW; (* 65C816 .816 module serializer — companion to ORG.
        map (which would overflow the backend's maxTD). *)
     ModArrays* = RECORD
       str*: ARRAY maxStrx OF INTEGER;
-      data*: ARRAY maxTD OF LONGINT;
+      data*: ARRAY maxTDW OF LONGINT;
       tdFixupOff*, tdFixupMno*: ARRAY maxTDFix OF INTEGER;
       vtFixOff*, vtFixMno*, vtFixExno*: ARRAY maxVtFix OF LONGINT
     END;

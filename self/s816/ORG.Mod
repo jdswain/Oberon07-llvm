@@ -45,8 +45,9 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     maxVtFix = 512;        (* max vtable-slot loader fixups per module *)
     maxItab = 128;         (* max distinct (record,interface) itables per module *)
     maxItabRef = 256;      (* max PtrToIface conversion sites per module *)
-    VtableOff = 20;        (* byte offset of vtable[0] in a TD: size(2) +
-                              4 ancestors(16), levels 0-3 + nofmeth(2). Each slot is 4 bytes,
+    ExtLevels = 8;         (* a TD's ancestors: extension levels 0-7 *)
+    VtableOff = 36;        (* byte offset of vtable[0] in a TD: size(2) +
+                              8 ancestors(32), levels 0-7 + nofmeth(2): 36. Each slot is 4 bytes,
                               the method's address and its bank (v3), filled by the
                               loader: modules are not all in one bank. *)
     SlotSize = 4;
@@ -1398,10 +1399,10 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       T.len := tdBase + dcw * 2;
       wa.data[dcw] := T.size; dcw := dcw + 1;
       k := T.nofpar;
-      IF k > 3 THEN ORS.Mark("ext level too large")
+      IF k >= ExtLevels THEN ORS.Mark("ext level too large")
       ELSE
         Q(T, dcw); k := k + 1;
-        WHILE k < 4 DO
+        WHILE k < ExtLevels DO
           wa.data[dcw] := 0FFFFH; wa.data[dcw + 1] := 0FFFFH;
           dcw := dcw + 2; k := k + 1
         END
@@ -1459,7 +1460,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       i := i + 1
     END;
     tdx := dcw;
-    IF tdx >= maxTD THEN ORS.Mark("too many record types"); tdx := 0 END;
+    IF tdx >= LEN(wa.data) THEN ORS.Mark("type descriptors too large"); tdx := 0 END;
     i := 0;
     WHILE i < tdRefC DO
       OCG.Patch(tdRefLoc[i], tdRefTyp[i].len MOD 100H);
@@ -3842,6 +3843,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
 
   (* --- OO / interface entry points: deferred to M4/M5 on this target --- *)
   PROCEDURE MethodItem*(VAR x: Item; m: ORB.Object; direct: BOOLEAN);
+    VAR t: ORB.Type; found: BOOLEAN; k: ORB.Object;
   BEGIN
     (* stash the receiver designator (current x) for PrepCall to pass as
        param 0; then turn x into the callable. *)
@@ -3850,7 +3852,20 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     x.isMeth := TRUE; x.type := m.type;
     IF direct THEN
       x.dynDisp := FALSE;
-      x.mode := ORB.Const; x.a := m.backend; x.r := 0;
+      (* the type that declares m, the receiver's or an ancestor: m is
+         in its module, which may be another (a SUPER call to a method
+         the base only inherits) *)
+      t := x.rcvType; IF t.form = ORB.Pointer THEN t := t.base END;
+      found := FALSE;
+      WHILE (t # NIL) & ~found DO
+        k := t.meth; WHILE (k # NIL) & (k # m) DO k := k.next END;
+        IF k = m THEN found := TRUE ELSE t := t.base END
+      END;
+      IF found & (t.mno > 0) THEN   (* imported: JSL (mno, exno), the loader's *)
+        x.mode := ORB.Const; x.a := m.exno; x.r := -t.mno
+      ELSE
+        x.mode := ORB.Const; x.a := m.backend; x.r := 0
+      END;
       (* methods always return via RTL (far convention — see Enter), so a
          direct/SUPER call must reach them with JSL even within the module *)
       x.b := 1
