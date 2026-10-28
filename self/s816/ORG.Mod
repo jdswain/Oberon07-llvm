@@ -1922,9 +1922,14 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         load(x);
         quotientReg := RH; incR;
         genDivLoop(x.r, y.r, quotientReg);
+        (* the quotient into the lower of x's and y's registers, those above
+           it freed: x was loaded first if it was computed already, and was
+           the lower then; leaving it counted, the next load went a register
+           too high (a RETURN: the result not where the caller looks) *)
+        IF y.r < x.r THEN x.r := y.r END;
         OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(quotientReg));
-        OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(y.r));
-        x.r := y.r; RH := y.r + 1
+        OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(x.r));
+        RH := x.r + 1
       END
     ELSE (* mod *)
       IF (x.mode = ORB.Const) & (y.mode = ORB.Const) THEN
@@ -1963,9 +1968,13 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         load(x);
         quotientReg := RH; incR;
         genDivLoop(x.r, y.r, quotientReg);
-        OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(x.r));
-        OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(y.r));
-        x.r := y.r; RH := y.r + 1
+        (* the remainder, in x's register, into the lower of x's and y's *)
+        IF y.r < x.r THEN
+          OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(x.r));
+          OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(y.r));
+          x.r := y.r
+        END;
+        RH := x.r + 1
       END
     END
   END DivOp;
@@ -3381,16 +3390,45 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   BEGIN
   END IntEn;
 
+  (* SYSTEM.GET's or PUT's bank, just parsed: loaded and pushed on the
+     hardware stack until GetB or PutB, its registers free for the
+     address and the value parsed after it. Loaded after them instead, a
+     bank that held registers (a field through a pointer) was left below
+     them, and the pointer pair was the address and whatever was above
+     it. frame += 2 shifts the stack-relative accesses meanwhile. *)
+  PROCEDURE SpillBank*(VAR bank: Item);
+  BEGIN load(bank); Set16(TRUE, TRUE);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(bank.r)); OCG.Pha;
+    RH := bank.r; frame := frame + 2
+  END SpillBank;
+
+  (* The pointer pair GetB and PutB want, (address, bank), at the top of
+     the registers, which Store frees: the address loaded and, if other's
+     registers are above it, moved up past them (theirs down one); then
+     the bank pulled into the register after it *)
+  PROCEDURE BankPair(VAR addr, other: Item);
+    VAR i: LONGINT;
+  BEGIN load(addr); Set16(TRUE, TRUE);
+    IF addr.r < RH - 1 THEN
+      OCG.gen1(OCG.LDX * 32 + OCG.mDP, RegAddr(addr.r));
+      FOR i := addr.r TO RH - 2 DO
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(i + 1)); OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(i))
+      END;
+      OCG.gen1(OCG.STX * 32 + OCG.mDP, RegAddr(RH - 1));
+      IF ((other.mode = Reg) OR (other.mode = RegI)) & (other.r > addr.r) THEN other.r := other.r - 1 END;
+      addr.r := RH - 1
+    END;
+    OCG.Pla; OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH)); incR; frame := frame - 2
+  END BankPair;
+
   PROCEDURE GetB*(VAR bank, addr, var: Item);
-  BEGIN
-    load(addr); load(bank);
+  BEGIN BankPair(addr, var);
     addr.type := var.type; addr.mode := RegI; addr.a := 0;
     Store(var, addr)
   END GetB;
 
   PROCEDURE PutB*(VAR bank, addr, val: Item);
-  BEGIN
-    load(addr); load(bank);
+  BEGIN BankPair(addr, val);
     addr.type := val.type; addr.mode := RegI; addr.a := 0;
     Store(addr, val)
   END PutB;

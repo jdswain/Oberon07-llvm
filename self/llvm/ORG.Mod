@@ -259,6 +259,8 @@ MODULE ORG; (* Interface to the LLVM code generator (DDR C-bridge module).
 
   (* --- 65C816-only SYSTEM entry points (inert on LLVM: never registered
      by InitSystem, so ORP never dispatches to them) --- *)
+  PROCEDURE SpillBank*(VAR bank: Item);
+  BEGIN END SpillBank;
   PROCEDURE GetB*(VAR bank, addr, var: Item);
   BEGIN END GetB;
   PROCEDURE PutB*(VAR bank, addr, val: Item);

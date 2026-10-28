@@ -902,6 +902,7 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
     Check(ORS.lparen, "no (");
     npar := pno MOD 10; pno := pno DIV 10;
     expression(x); nap := 1;
+    IF (pno = 10) OR (pno = 11) THEN ORG.SpillBank(x) END;   (* GET, PUT: the bank, before the rest takes registers *)
     IF sym = ORS.comma THEN
       ORS.Get(sym); expression(y); nap := 2;
       z.type := ORB.noType;
