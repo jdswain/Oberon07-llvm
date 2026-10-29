@@ -2472,36 +2472,54 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       ELSE ORS.Mark("inadmissible assignment"); valid := FALSE
       END;
       IF valid & ~openSrc THEN
-        wordCount := (s + 1) DIV 2; Set16(TRUE, TRUE);
+        (* s DIV 2 words, then an odd size's last byte alone: a word there
+           would write the byte after (the next element of an array of
+           65-byte records) *)
+        wordCount := s DIV 2; Set16(TRUE, TRUE);
         OCG.gen1(OCG.LDY * 32 + OCG.mImm, 0);
-        OCG.gen1(OCG.LDX * 32 + OCG.mImm, wordCount);
-        loopTop := OCG.Here();
-        OCG.gen1(OCG.LDA * 32 + OCG.mDPIndLY, srcReg);   (* [dp],Y: the pointers' banks *)
-        OCG.gen1(OCG.STA * 32 + OCG.mDPIndLY, dstReg);
-        OCG.Iny;
-        OCG.Iny;
-        OCG.Dex;
-        OCG.gen1(OCG.BNE * 32 + OCG.mPCR, loopTop)
+        IF wordCount > 0 THEN
+          OCG.gen1(OCG.LDX * 32 + OCG.mImm, wordCount);
+          loopTop := OCG.Here();
+          OCG.gen1(OCG.LDA * 32 + OCG.mDPIndLY, srcReg);   (* [dp],Y: the pointers' banks *)
+          OCG.gen1(OCG.STA * 32 + OCG.mDPIndLY, dstReg);
+          OCG.Iny;
+          OCG.Iny;
+          OCG.Dex;
+          OCG.gen1(OCG.BNE * 32 + OCG.mPCR, loopTop)
+        END;
+        IF ODD(s) THEN
+          Set8(TRUE, FALSE);
+          OCG.gen1(OCG.LDA * 32 + OCG.mDPIndLY, srcReg);
+          OCG.gen1(OCG.STA * 32 + OCG.mDPIndLY, dstReg);
+          Set16(TRUE, FALSE)
+        END
       ELSIF openSrc THEN
-        (* wordCount := (LEN(y) * elemSize + 1) DIV 2, computed in A->X.
-           X (the word counter) and Y (the byte index) are 16-bit. LEN(y) is
-           at the param's length slot, y.a + 4 + frame (same as Len). *)
+        (* LEN(y) * elemSize bytes: its DIV 2 words, computed in A->X, the
+           odd byte (LSR's carry, kept by PHP) alone after them. X (the word
+           counter) and Y (the byte index) are 16-bit. LEN(y) is at the
+           param's length slot, y.a + 4 + frame (same as Len). *)
         Set16(TRUE, TRUE);
+        OCG.gen1(OCG.LDY * 32 + OCG.mImm, 0);
         OCG.gen1(OCG.LDA * 32 + OCG.mSR, y.a + 4 + frame);   (* A := element count *)
         i := 0;
         WHILE i < k DO OCG.gen1(OCG.ASL * 32 + OCG.mImpl, 0); i := i + 1 END; (* *elemSize *)
-        OCG.gen1(OCG.INC * 32 + OCG.mImpl, 0);               (* +1 ... *)
-        OCG.gen1(OCG.LSR * 32 + OCG.mImpl, 0);               (* ... DIV 2 = wordCount *)
+        OCG.gen1(OCG.LSR * 32 + OCG.mImpl, 0);               (* DIV 2 = wordCount, C odd *)
+        OCG.gen1(OCG.PHP * 32 + OCG.mImpl, 0);
         OCG.Tax;               (* X := wordCount (sets Z) *)
-        OCG.gen1(OCG.BEQ * 32 + OCG.mPCR, OCG.Here() + 14);  (* empty -> skip loop *)
-        OCG.gen1(OCG.LDY * 32 + OCG.mImm, 0);
+        OCG.gen1(OCG.BEQ * 32 + OCG.mPCR, OCG.Here() + 11);  (* none -> past the loop (9 bytes) *)
         loopTop := OCG.Here();
         OCG.gen1(OCG.LDA * 32 + OCG.mDPIndLY, srcReg);   (* [dp],Y: the pointers' banks *)
         OCG.gen1(OCG.STA * 32 + OCG.mDPIndLY, dstReg);
         OCG.Iny;
         OCG.Iny;
         OCG.Dex;
-        OCG.gen1(OCG.BNE * 32 + OCG.mPCR, loopTop)
+        OCG.gen1(OCG.BNE * 32 + OCG.mPCR, loopTop);
+        OCG.gen1(OCG.PLP * 32 + OCG.mImpl, 0);
+        OCG.gen1(OCG.BCC * 32 + OCG.mPCR, OCG.Here() + 10);  (* even -> past the byte (8 bytes) *)
+        Set8(TRUE, FALSE);
+        OCG.gen1(OCG.LDA * 32 + OCG.mDPIndLY, srcReg);
+        OCG.gen1(OCG.STA * 32 + OCG.mDPIndLY, dstReg);
+        Set16(TRUE, FALSE)
       END
     END;
     RH := 0

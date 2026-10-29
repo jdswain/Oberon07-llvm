@@ -2457,6 +2457,18 @@ void ORG_Len(ORG_Item *x) {
 void ORG_Shift(LONGINT fct, ORG_Item *x, ORG_Item *y) {
     LLVMValueRef a = LoadItem(x), b = LoadItem(y);
     LLVMTypeRef at = LLVMTypeOf(a);
+    /* ASL and LSR give an INTEGER: a narrower operand (a BYTE) is widened
+       first, or ASL(b, 8) would shift its bits out of 8 and give 0. ROL
+       keeps the operand's width (a byte rotated is a byte). */
+    if (fct <= 1 && x->type && x->type->form == ORB_Int) {
+        LLVMTypeRef it = LlvmType(intType);
+        if (LLVMGetIntTypeWidth(at) < LLVMGetIntTypeWidth(it)) {
+            a = LLVMBuildZExt(Bld, a, it, "shw");
+            at = it;
+            x->type = intType;
+            x->orig_type = intType;
+        }
+    }
     /* fshl requires all three operands to share a type; coerce shift count. */
     if (LLVMTypeOf(b) != at) {
         unsigned aw = LLVMGetIntTypeWidth(at);
