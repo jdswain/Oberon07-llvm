@@ -206,6 +206,7 @@ MODULE OCG; (* 65C816 instruction encoder.
     o(3BH);                             (* TSC *)
     o(18H);                             (* CLC *)
     o(63H); o(1);                       (* ADC 1,S *)
+    o(18H);                             (* CLC: S above the page carried *)
     o(69H); o(v + 4); o((v + 4) DIV 100H);   (* ADC #(v + 4): S was 4 more *)
     o(0AAH);                            (* TAX *)
     o(68H)                              (* PLA *)
