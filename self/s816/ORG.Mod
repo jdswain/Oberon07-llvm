@@ -1793,6 +1793,26 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     VAR i: LONGINT;
   BEGIN
     Set16(TRUE, TRUE); i := 0;
+    IF e >= 16 THEN   (* a word at once: the high into the low, the sign into the high *)
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(r + 1));
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(r));
+      OCG.gen1(OCG.LDA * 32 + OCG.mImm, 0);
+      OCG.gen1(OCG.BIT * 32 + OCG.mDP, RegAddr(r + 1));  (* N := the sign *)
+      OCG.gen1(OCG.BPL * 32 + OCG.mPCR, OCG.Here() + 2 + 1);
+      OCG.gen1(OCG.DEC * 32 + OCG.mAcc, 0);              (* 0FFFFH *)
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(r + 1));
+      i := 16
+    ELSIF e >= 8 THEN   (* a byte at once: bytes 1 and 2 the low word, byte 3 the high, its sign extended *)
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(r) + 1);
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(r));
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(r) + 3);
+      OCG.gen1(OCG.AND * 32 + OCG.mImm, 0FFH);
+      OCG.gen1(OCG.CMP * 32 + OCG.mImm, 80H);
+      OCG.gen1(OCG.BCC * 32 + OCG.mPCR, OCG.Here() + 2 + 3);
+      OCG.gen1(OCG.ORA * 32 + OCG.mImm, 0FF00H);
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(r + 1));
+      i := 8
+    END;
     WHILE i < e DO
       OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(r + 1));
       OCG.gen1(OCG.CMP * 32 + OCG.mImm, 8000H);          (* C := high-word sign *)
@@ -1807,6 +1827,20 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     VAR i: LONGINT;
   BEGIN
     Set16(TRUE, TRUE); i := 0;
+    IF e >= 16 THEN   (* a word at once: the low into the high, 0 into the low *)
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(r));
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(r + 1));
+      OCG.gen1(OCG.STZ * 32 + OCG.mDP, RegAddr(r));
+      i := 16
+    ELSIF e >= 8 THEN   (* a byte at once: bytes 1 and 2 the high word, byte 0 into byte 1 *)
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(r) + 1);
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(r + 1));
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(r));
+      OCG.Xba;
+      OCG.gen1(OCG.AND * 32 + OCG.mImm, 0FF00H);
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(r));
+      i := 8
+    END;
     WHILE i < e DO
       OCG.gen1(OCG.ASL * 32 + OCG.mDP, RegAddr(r));      (* low <<1, bit15->C *)
       OCG.gen1(OCG.ROL * 32 + OCG.mDP, RegAddr(r + 1));  (* high <<1, C->bit0 *)
@@ -1939,12 +1973,17 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
           (* remainder = value AND (2^e - 1); masking each word with the low/high
              half of the mask zeroes everything above bit e uniformly. *)
           load(x); Set16(TRUE, TRUE);
-          OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(x.r));
-          OCG.gen1(OCG.AND * 32 + OCG.mImm, Lo16(y.a - 1));
-          OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(x.r));
-          OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(x.r + 1));
-          OCG.gen1(OCG.AND * 32 + OCG.mImm, Hi16(y.a - 1));
-          OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(x.r + 1))
+          IF Lo16(y.a - 1) # 0FFFFH THEN   (* a mask of all ones: the word as it is *)
+            OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(x.r));
+            OCG.gen1(OCG.AND * 32 + OCG.mImm, Lo16(y.a - 1));
+            OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(x.r))
+          END;
+          IF Hi16(y.a - 1) = 0 THEN OCG.gen1(OCG.STZ * 32 + OCG.mDP, RegAddr(x.r + 1))
+          ELSE
+            OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(x.r + 1));
+            OCG.gen1(OCG.AND * 32 + OCG.mImm, Hi16(y.a - 1));
+            OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(x.r + 1))
+          END
         ELSE
           load(x); Set16(TRUE, TRUE);
           OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(x.r));
