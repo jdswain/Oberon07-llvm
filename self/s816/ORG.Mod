@@ -561,16 +561,15 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
             Set16(TRUE, TRUE);
             mno := -x.r; exno := x.a;
             encoded := mno * 100H + (exno MOD 100H);
+            (* PER for the address in the target's bank, LDA # for that bank (not
+               PHK: the target may be in another bank). The PER's relocation
+               fills both: the LDA's operand is 7 bytes after the PER *)
             OCG.AddRel(OCG.Here());
             OCG.gen1(OCG.PER * 32 + OCG.mImm, encoded);
             OCG.Pla;
             OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH));
-            OCG.gen1(OCG.STZ * 32 + OCG.mDP, RegAddr(RH + 1));
-            OCG.Phk;
-            Set8(TRUE, FALSE);
-            OCG.Pla;
+            OCG.gen1(OCG.LDA * 32 + OCG.mImm, 0);
             OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH + 1));
-            Set16(TRUE, FALSE);
             x.r := RH; incR; incR
           END
         ELSIF (x.type.form = ORB.Real) OR IsLong(x.type) THEN
