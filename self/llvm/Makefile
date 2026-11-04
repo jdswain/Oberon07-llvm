@@ -31,16 +31,20 @@ RT_SMB := $(RT)/Errors.smb $(RT)/Out.smb $(RT)/Files.smb
 CC     := clang
 CFLAGS := -std=c11 -Wall -Wno-unused-parameter -Wno-unused-function -g $(LLVM_CFLAGS)
 
-MODS := ORS ORB ORG ORP
+MODS := ORH ORS ORB ORG ORPS ORP
 OBJS := $(MODS:%=%.o) ORG_rt.o main.o
 
 all: oc-self
 
 # Copy the shared frontend in from ../ (masters live there).
+ORH.Mod: ../ORH.Mod
+	cp ../ORH.Mod .
 ORS.Mod: ../ORS.Mod
 	cp ../ORS.Mod .
 ORB.Mod: ../ORB.Mod
 	cp ../ORB.Mod .
+ORPS.Mod: ../ORPS.Mod
+	cp ../ORPS.Mod .
 ORP.Mod: ../ORP.Mod
 	cp ../ORP.Mod .
 
@@ -57,13 +61,17 @@ $(RT)/Files.smb: $(RT)/Files.Mod $(RT)/Errors.smb
 # Stage-0 compilation. Modules depend on each other's .smb files, so the
 # order is fixed: ORS -> ORB -> ORG -> ORP. ORS imports Files + Out, so the
 # runtime .smb must exist first.
-ORS.o: ORS.Mod $(RT_SMB)
+ORH.o: ORH.Mod $(RT_SMB)
+	$(OC0) -s ORH.Mod
+ORS.o: ORS.Mod ORH.o
 	$(OC0) -s ORS.Mod
 ORB.o: ORB.Mod ORS.o
 	$(OC0) -s ORB.Mod
 ORG.o: ORG.Mod ORB.o
 	$(OC0) -s ORG.Mod
-ORP.o: ORP.Mod ORG.o
+ORPS.o: ORPS.Mod ORG.o
+	$(OC0) -s ORPS.Mod
+ORP.o: ORP.Mod ORPS.o
 	$(OC0) -s ORP.Mod
 
 ORG_rt.c main.c: gen_bridge.py ../../src/ORG.c ../../src/ORP.c
@@ -82,6 +90,6 @@ oc-self: $(OBJS) $(RT_SMB)
 	    $(LLVM_LIBS)
 
 clean:
-	rm -f *.o *.smb *.ll *.deps oc-self ORG_rt.c main.c ORS.Mod ORB.Mod ORP.Mod
+	rm -f *.o *.smb *.ll *.deps oc-self ORG_rt.c main.c ORH.Mod ORS.Mod ORB.Mod ORPS.Mod ORP.Mod
 
 .PHONY: all clean

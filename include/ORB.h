@@ -172,6 +172,8 @@ void Import(char *modid, char *modid1);
 void Export(const char *modid, BOOLEAN *newSF, int32_t *key);
 void AddSearchPath(const char *path);
 void ORB_Init(void);  /* renamed from Init */
+void ORB_SetModule(const char *name);
+void ORB_AddFriend(const char *name);
 void ORB_Initialize(void);  /* Module initialization */
 
 /* File operations are now provided by Files.h */

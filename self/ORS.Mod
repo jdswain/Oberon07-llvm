@@ -6,7 +6,7 @@ MODULE ORS; (* NW 19.9.93 / 15.3.2017  Scanner in Oberon-07.
      - the OO-extension keywords WEAK, INIT, OVERRIDE, SUPER, INTERFACE,
        IMPLEMENTS (DDR-007/008) — token values match include/ORS.h. *)
 
-  IMPORT SYSTEM, Files, Out;
+  IMPORT SYSTEM, Files, ORH;
 
   CONST IdLen* = 32;
     NKW = 40;  (*nof keywords*)
@@ -73,10 +73,10 @@ MODULE ORS; (* NW 19.9.93 / 15.3.2017  Scanner in Oberon-07.
     VAR p: LONGINT;
   BEGIN p := srcPos - 1;
     IF (p > errpos) & (errcnt < 25) THEN
-      Out.WriteString("  pos "); Out.WriteInt(p);
-      Out.WriteString(" ["); Out.WriteInt(line);
-      Out.WriteString(":"); Out.WriteInt(col);
-      Out.WriteString("]  "); Out.WriteString(msg); Out.Ln();
+      ORH.WriteString("  pos "); ORH.WriteInt(p);
+      ORH.WriteString(" ["); ORH.WriteInt(line);
+      ORH.WriteString(":"); ORH.WriteInt(col);
+      ORH.WriteString("]  "); ORH.WriteString(msg); ORH.Ln();
       INC(errcnt)
     END;
     errpos := p + 4

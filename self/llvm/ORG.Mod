@@ -168,7 +168,7 @@ MODULE ORG; (* Interface to the LLVM code generator (DDR C-bridge module).
   (* --- FOR --- *)
   PROCEDURE For0*(VAR x, y: Item);
   BEGIN END For0;
-  PROCEDURE For1*(VAR x, y, z, w: Item; VAR L: LONGINT);
+  PROCEDURE For1*(VAR x, z, w: Item; VAR L: LONGINT);
   BEGIN END For1;
   PROCEDURE For2*(VAR x, y, w: Item);
   BEGIN END For2;

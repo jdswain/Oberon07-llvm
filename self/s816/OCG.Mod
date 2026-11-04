@@ -32,6 +32,9 @@ MODULE OCG; (* 65C816 instruction encoder.
     maxCode* = 131072;       (* code-buffer size = LARGE-model cap (2 banks) *)
     CodeOrg = 0;             (* code starts at $0000 *)
     maxReloc* = 4096;
+    (* code is held in chunks on the heap: a 65C816 module's variables are
+       in bank 0, and an array is indexed within a bank *)
+    ChunkSize = 8000H; maxChunks = 4;   (* maxCode DIV ChunkSize *)
 
     (* addressing modes — same order as the C AddrMode enum *)
     mAbs* = 0; mAcc* = 1; mAbsX* = 2; mAbsY* = 3; mAbsL* = 4;
@@ -60,16 +63,22 @@ MODULE OCG; (* 65C816 instruction encoder.
     TXS* = 84; TXY* = 85; TYA* = 86; TYX* = 87; WAI* = 88; WDM* = 89;
     XBA* = 90; XCE* = 91;
 
+  TYPE
+    Chunk = POINTER TO ChunkDesc;
+    ChunkDesc = RECORD b: ARRAY ChunkSize OF BYTE END;
+    Relocs = POINTER TO RelocsDesc;
+    RelocsDesc = RECORD r: ARRAY maxReloc OF LONGINT END;
+
   VAR
     (* State is private (Oberon exports VARs read-only); ORG mutates it
        through the accessors below. The hot path — Gen — touches code/pc
        directly, so per-instruction emission stays a single call. *)
-    code: ARRAY maxCode OF BYTE;
+    code: ARRAY maxChunks OF Chunk;   (* allocated as they are reached *)
     pc: LONGINT;               (* code index = address (CodeOrg = 0) *)
     codeLimit: LONGINT;        (* active code cap: maxCodeSmall, or ~maxCode in LARGE *)
     longa, longi: BOOLEAN;     (* 16-bit accumulator / index registers *)
     dpage, pbreg: LONGINT;
-    reloc: ARRAY maxReloc OF LONGINT;
+    reloc: Relocs;
     relocC: INTEGER;
     fault: BOOLEAN;            (* a fixed buffer (code/reloc) overflowed *)
 
@@ -79,9 +88,19 @@ MODULE OCG; (* 65C816 instruction encoder.
      fault flag instead of writing past `code` (which segfaulted the
      self-compile of the big ORG module). pc stays monotonic so branch
      offsets remain consistent; the fault makes Close refuse to emit. *)
+  (* code[at] := b, its chunk allocated (and zeroed) when first reached *)
+  PROCEDURE put(at, b: LONGINT);
+    VAR k, i: LONGINT;
+  BEGIN k := at DIV ChunkSize;
+    IF code[k] = NIL THEN NEW(code[k]);
+      FOR i := 0 TO ChunkSize - 1 DO code[k].b[i] := 0 END
+    END;
+    code[k].b[at MOD ChunkSize] := b MOD 100H
+  END put;
+
   PROCEDURE o(b: LONGINT);
   BEGIN
-    IF pc - CodeOrg < codeLimit THEN code[pc - CodeOrg] := b MOD 100H
+    IF pc - CodeOrg < codeLimit THEN put(pc - CodeOrg, b)
     ELSE fault := TRUE
     END;
     pc := pc + 1
@@ -92,7 +111,7 @@ MODULE OCG; (* 65C816 instruction encoder.
      (an out-of-bounds LONGINT store in gen). Overflow sets fault. *)
   PROCEDURE addReloc(p: LONGINT);
   BEGIN
-    IF relocC < maxReloc THEN reloc[relocC] := p; relocC := relocC + 1
+    IF relocC < maxReloc THEN reloc.r[relocC] := p; relocC := relocC + 1
     ELSE fault := TRUE
     END
   END addReloc;
@@ -242,12 +261,12 @@ MODULE OCG; (* 65C816 instruction encoder.
   PROCEDURE staBigSR(v: LONGINT);
     VAR save: BOOLEAN;
   BEGIN
-    ob(85H, 42H);                       (* STA $42 *)
+    ob(85H, 0);                         (* STA $00, free: SB is at $42 *)
     save := longa;
     IF ~longa THEN o(0C2H); o(20H); longa := TRUE END;
     bigX(v);
     IF ~save THEN o(0E2H); o(20H); longa := FALSE END;
-    ob(0A5H, 42H);                      (* LDA $42 *)
+    ob(0A5H, 0);                        (* LDA $00 *)
     o(95H); o(0);                       (* STA $00,X *)
     o(0FAH)                             (* PLX *)
   END staBigSR;
@@ -655,12 +674,15 @@ MODULE OCG; (* 65C816 instruction encoder.
   PROCEDURE Get*(at: LONGINT): INTEGER;
     VAR r: INTEGER;
   BEGIN
-    IF (at >= 0) & (at < maxCode) THEN r := code[at] ELSE fault := TRUE; r := 0 END;
+    IF (at >= 0) & (at < maxCode) THEN
+      IF code[at DIV ChunkSize] = NIL THEN r := 0 ELSE r := code[at DIV ChunkSize].b[at MOD ChunkSize] END
+    ELSE fault := TRUE; r := 0
+    END;
     RETURN r
   END Get;
   PROCEDURE Patch*(at, b: LONGINT);
   BEGIN
-    IF (at >= 0) & (at < maxCode) THEN code[at] := b MOD 100H ELSE fault := TRUE END
+    IF (at >= 0) & (at < maxCode) THEN put(at, b) ELSE fault := TRUE END
   END Patch;
   PROCEDURE LongA*(): BOOLEAN;        BEGIN RETURN longa END LongA;
   PROCEDURE SetLongA*(b: BOOLEAN);    BEGIN longa := b END SetLongA;
@@ -674,7 +696,7 @@ MODULE OCG; (* 65C816 instruction encoder.
   BEGIN IF large THEN codeLimit := maxCode - 512 ELSE codeLimit := maxCodeSmall END
   END SetLarge;
   PROCEDURE RelCount*(): INTEGER;     BEGIN RETURN relocC END RelCount;
-  PROCEDURE Rel*(i: INTEGER): LONGINT; BEGIN RETURN reloc[i] END Rel;
+  PROCEDURE Rel*(i: INTEGER): LONGINT; BEGIN RETURN reloc.r[i] END Rel;
   PROCEDURE AddRel*(p: LONGINT);
   BEGIN addReloc(p)
   END AddRel;
@@ -686,13 +708,17 @@ MODULE OCG; (* 65C816 instruction encoder.
   END Faulted;
 
   PROCEDURE Init*;
+    VAR k, i: LONGINT;
   BEGIN
+    FOR k := 0 TO maxChunks - 1 DO   (* a module compiled before: its code gone *)
+      IF code[k] # NIL THEN FOR i := 0 TO ChunkSize - 1 DO code[k].b[i] := 0 END END
+    END;
     pc := CodeOrg; longa := TRUE; longi := TRUE;
     dpage := 0; pbreg := 0; relocC := 0; fault := FALSE;
     codeLimit := maxCodeSmall
   END Init;
 
-BEGIN
+BEGIN NEW(reloc);
   pc := CodeOrg; longa := TRUE; longi := TRUE;
   dpage := 0; pbreg := 0; relocC := 0; fault := FALSE;
   codeLimit := maxCodeSmall

@@ -7,7 +7,7 @@ MODULE ORGW; (* 65C816 .816 module serializer — companion to ORG.
    readout), ORB (symbol-table walk) and Files (output), never ORG, so
    there is no import cycle: ORG.Close finalizes the code then calls
    ORGW.WriteModule, passing the state (arrays by reference). *)
-  IMPORT OCG, ORB, Files;
+  IMPORT OCG, ORB, Files, ORH;
 
   CONST
     CodeOrg = 0;    (* .816 code base offset *)
@@ -29,6 +29,7 @@ MODULE ORGW; (* 65C816 .816 module serializer — companion to ORG.
        Only pointer-free arrays go here — tdList (ARRAY OF ORB.Type) is passed
        separately so this record's type descriptor needs no 160-slot pointer
        map (which would overflow the backend's maxTD). *)
+    ModArraysPtr* = POINTER TO ModArrays;   (* on the heap: 51 KB, more than bank 0 has room for *)
     ModArrays* = RECORD
       str*: ARRAY maxStrx OF INTEGER;
       data*: ARRAY maxTDW OF LONGINT;
@@ -78,7 +79,7 @@ MODULE ORGW; (* 65C816 .816 module serializer — companion to ORG.
   PROCEDURE WriteModule*(modid: ARRAY OF CHAR; VAR info: ModInfo; VAR wa: ModArrays;
       VAR tdList: ARRAY OF ORB.Type);
     VAR obj: ORB.Object; i, comsize, nofimps, nofptrs, size: LONGINT;
-      name: ARRAY 256 OF CHAR; F: Files.File; R: Files.Rider;
+      name, path: ARRAY 256 OF CHAR; F: Files.File; R: Files.Rider;
       entryVal: ARRAY maxEnt OF LONGINT;
       key, nofent, version, varsize, strx, tdx, entry: LONGINT;
       fixorgP, fixorgD, fixorgT, tdListC, tdFixupC, vtFixC: LONGINT;
@@ -113,7 +114,7 @@ MODULE ORGW; (* 65C816 .816 module serializer — companion to ORG.
     i := 0; WHILE modid[i] # 0X DO name[i] := modid[i]; i := i + 1 END;
     name[i] := "."; name[i + 1] := "8"; name[i + 2] := "1"; name[i + 3] := "6";
     name[i + 4] := 0X;
-    F := Files.New(name);
+    ORH.FileName(name, path); F := Files.New(path);
     Files.Set(R, F, 0);
     Files.WriteString(R, modid);
     Write4(R, key);

@@ -14,9 +14,10 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
    backend reads Object/Type/Item graphs directly). Do not reorder
    fields without updating the mirrors. *)
 
-  IMPORT Files, Out, ORS;
+  IMPORT Files, ORH, ORS;
 
-  CONST versionkey* = 6; maxTypTab = 64;   (* v6: methods carry exno (816 cross-module) *)
+  CONST versionkey* = 6; maxTypTab = 64;
+    maxFriends = 8;   (* the modules a module's header names as its friends *)   (* v6: methods carry exno (816 cross-module) *)
     MnLength = 104;  (* mangled Mod__Type__Name *)
 
     (* class values *)
@@ -86,6 +87,12 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
     sourceDir: ARRAY 256 OF CHAR;
     searchPaths: ARRAY 8 OF ARRAY 256 OF CHAR;
     numSearchPaths: INTEGER;
+    (* the module compiled, and its friends (MODULE M FRIENDS A, B): the
+       modules that may assign to its variables. The symbol file lists them
+       after its objects, where a reader of the objects alone stops *)
+    selfName: ORS.Ident;
+    friends: ARRAY maxFriends OF ORS.Ident;
+    nofFriends: INTEGER;
 
   (* ----- helpers ----- *)
 
@@ -344,6 +351,11 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
     END
   END AddSearchPath;
 
+  (* none: a compiler that stays loaded compiles again (OS16's oc) *)
+  PROCEDURE ResetSearchPaths*;
+  BEGIN numSearchPaths := 0
+  END ResetSearchPaths;
+
   PROCEDURE FindSymbolFile(modname: ARRAY OF CHAR): Files.File;
     VAR fname: ARRAY 256 OF CHAR;
       F: Files.File;
@@ -448,6 +460,20 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
     x := n
   END RNum;
 
+  (* A 4-byte integer, little-endian, as Files.ReadInt and WriteInt are
+     where INTEGER is 32 bits: here also where it is 16 (on the 65C816) *)
+  PROCEDURE RInt(VAR R: Files.Rider; VAR x: LONGINT);
+    VAR b0, b1, b2, b3: BYTE; h: LONGINT;
+  BEGIN Files.ReadByte(R, b0); Files.ReadByte(R, b1); Files.ReadByte(R, b2); Files.ReadByte(R, b3);
+    h := b3; IF h >= 80H THEN h := h - 100H END;
+    x := ((h * 100H + b2) * 100H + b1) * 100H + b0
+  END RInt;
+
+  PROCEDURE WInt(VAR R: Files.Rider; x: LONGINT);
+  BEGIN Files.WriteByte(R, x MOD 100H); Files.WriteByte(R, x DIV 100H MOD 100H);
+    Files.WriteByte(R, x DIV 10000H MOD 100H); Files.WriteByte(R, x DIV 1000000H MOD 100H)
+  END WInt;
+
   PROCEDURE WNum(VAR R: Files.Rider; x: LONGINT);
   BEGIN
     WHILE (x < -64) OR (x >= 64) DO
@@ -459,7 +485,7 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
   (* ----- import ----- *)
 
   PROCEDURE InType(VAR R: Files.Rider; thismod: Object; VAR T: Type);
-    VAR key: INTEGER;
+    VAR key: LONGINT;
       ref, class, form, np, readonly, k: INTEGER;
       n: LONGINT;
       fld, par, obj, mod, last, lastmeth, mth: Object;
@@ -578,7 +604,7 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
 
       Files.ReadString(R, modname);
       IF modname[0] # 0X THEN  (*re-import*)
-        Files.ReadInt(R, key);
+        RInt(R, key);
         Files.ReadString(R, name);
         mod := ThisModule(modname, modname, FALSE, key);
         obj := mod.dsc;
@@ -595,13 +621,38 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
     END
   END InType;
 
+  PROCEDURE SetModule*(name: ARRAY OF CHAR);
+  BEGIN CopyStr(selfName, name); nofFriends := 0
+  END SetModule;
+
+  PROCEDURE AddFriend*(name: ARRAY OF CHAR);
+  BEGIN
+    IF nofFriends < maxFriends THEN CopyStr(friends[nofFriends], name); INC(nofFriends)
+    ELSE ORS.Mark("too many friends")
+    END
+  END AddFriend;
+
+  (* the next friend's name: FALSE after the last (an empty name, or the
+     end of the file) *)
+  PROCEDURE ReadFriend(VAR R: Files.Rider; VAR name: ORS.Ident): BOOLEAN;
+    VAR i: INTEGER; b: BYTE;
+  BEGIN i := 0; Files.ReadByte(R, b);
+    WHILE ~R.eof & (b # 0) DO
+      IF i < ORS.IdLen - 1 THEN name[i] := CHR(b); INC(i) END;
+      Files.ReadByte(R, b)
+    END;
+    name[i] := 0X
+    RETURN i > 0
+  END ReadFriend;
+
   PROCEDURE Import*(modid, modid1: ARRAY OF CHAR);
-    VAR key: INTEGER;
+    VAR key: LONGINT;
       class, k: INTEGER;
       obj, old: Object;
       t: Type;
       thismod: Object;
-      modname: ORS.Ident;
+      modname, friend: ORS.Ident;
+      friendly: BOOLEAN;
       F: Files.File;
       R: Files.Rider;
   BEGIN
@@ -612,7 +663,7 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
       F := FindSymbolFile(modid1);
       IF F # NIL THEN
         Files.Set(R, F, 0);
-        Files.ReadInt(R, key); Files.ReadInt(R, key);
+        RInt(R, key); RInt(R, key);
         Files.ReadString(R, modname);
         thismod := ThisModule(modid, modid1, TRUE, key);
         thismod.rdo := TRUE;
@@ -637,7 +688,7 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
           ELSE
             IF class = Const THEN
               IF obj.type.form = Real THEN
-                Files.ReadInt(R, k); obj.val := k
+                RInt(R, obj.val)
               ELSE RNum(R, obj.val)
               END
             ELSIF class = Var THEN
@@ -647,6 +698,17 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
           obj.expo := TRUE;
           obj.next := thismod.dsc; thismod.dsc := obj;
           Read(R, class)
+        END;
+        friendly := FALSE;
+        WHILE ReadFriend(R, friend) DO
+          IF friend = selfName THEN friendly := TRUE END
+        END;
+        IF friendly THEN   (* its variables may be assigned to here *)
+          obj := thismod.dsc;
+          WHILE obj # NIL DO
+            IF obj.class = Var THEN obj.rdo := FALSE END;
+            obj := obj.next
+          END
         END;
         Files.Close(F)
       ELSE ORS.Mark("import not available")
@@ -729,7 +791,7 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
       WHILE (mod # NIL) & (mod.lev # t.mno) DO mod := mod.next END;
       IF mod # NIL THEN
         Files.WriteString(R, mod(Module).orgname);
-        Files.WriteInt(R, mod.val);
+        WInt(R, mod.val);
         Files.WriteString(R, t.typobj.name)
       ELSE ORS.Mark("re-export not found"); Write(R, 0)
       END
@@ -789,7 +851,7 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
   END OutType;
 
   PROCEDURE Export*(modid: ARRAY OF CHAR; VAR newSF: BOOLEAN; VAR key: LONGINT);
-    VAR x, sum, oldkey: INTEGER;
+    VAR x: INTEGER; w, lo, hi, sum, oldkey: LONGINT;
       obj, obj0: Object;
       filename: ARRAY 256 OF CHAR;
       F, F1: Files.File;
@@ -801,14 +863,14 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
     (* read old checksum first *)
     F1 := Files.Old(filename);
     IF F1 # NIL THEN
-      Files.Set(R1, F1, 4); Files.ReadInt(R1, oldkey); Files.Close(F1)
+      Files.Set(R1, F1, 4); RInt(R1, oldkey); Files.Close(F1)
     ELSE oldkey := 0
     END;
 
     F := Files.New(filename);
     Files.Set(R, F, 0);
-    Files.WriteInt(R, 0);  (*placeholder*)
-    Files.WriteInt(R, 0);  (*placeholder for key*)
+    WInt(R, 0);  (*placeholder*)
+    WInt(R, 0);  (*placeholder for key*)
     Files.WriteString(R, modid);
     Write(R, versionkey);
 
@@ -834,7 +896,7 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
         ELSIF obj.class = Const THEN
           IF obj.type.form = Proc THEN WNum(R, obj.exno)
           ELSIF obj.type.form = Real THEN
-            x := obj.val; Files.WriteInt(R, x)
+            WInt(R, obj.val)
           ELSIF (obj.type.form = Array) OR (obj.type.form = Record) THEN
             WNum(R, varsize + obj.val)
           ELSE WNum(R, obj.val)
@@ -846,21 +908,29 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
       obj := obj.next
     END;
 
-    REPEAT Write(R, 0) UNTIL Files.Length(F) MOD 4 = 0;
+    Write(R, 0);
+    FOR x := 0 TO nofFriends - 1 DO Files.WriteString(R, friends[x]) END;
+    WHILE Files.Length(F) MOD 4 # 0 DO Write(R, 0) END;
 
     FOR x := Record+1 TO maxTypTab-1 DO typtab[x] := NIL END;
+    longType.ref := 0;   (* LONGINT has no fixed reference: described afresh in each symbol file *)
 
-    (* checksum over the buffered content, then patch and register once *)
+    (* checksum over the buffered content, then patch and register once:
+       the sum of its 4-byte words, signed, modulo 2^32. In halves, so that
+       it wraps alike whether LONGINT has 32 bits or 64 *)
     Files.Set(R, F, 0);
-    sum := 0; Files.ReadInt(R, x);
+    lo := 0; hi := 0; RInt(R, w);
     WHILE ~R.eof DO
-      sum := sum + x; Files.ReadInt(R, x)
+      lo := lo + w MOD 10000H; hi := hi + w DIV 10000H MOD 10000H; RInt(R, w)
     END;
+    hi := (hi + lo DIV 10000H) MOD 10000H; lo := lo MOD 10000H;
+    IF hi >= 8000H THEN hi := hi - 10000H END;
+    sum := hi * 10000H + lo;
 
     IF sum # oldkey THEN
       IF newSF OR (oldkey = 0) THEN
         key := sum; newSF := TRUE;
-        Files.Set(R, F, 4); Files.WriteInt(R, sum);
+        Files.Set(R, F, 4); WInt(R, sum);
         Files.Register(F); Files.Close(F)
       ELSE ORS.Mark("new symbol file inhibited")
       END
@@ -868,7 +938,7 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
       (* interface fingerprint unchanged — keep the existing key, but
          still patch it in (the fresh file has a placeholder there) *)
       newSF := FALSE; key := sum;
-      Files.Set(R, F, 4); Files.WriteInt(R, sum);
+      Files.Set(R, F, 4); WInt(R, sum);
       Files.Register(F); Files.Close(F)
     END
   END Export;
@@ -994,5 +1064,5 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
   END Initialize;
 
 BEGIN
-  numSearchPaths := 0; sourceDir[0] := 0X; varsize := 0
+  numSearchPaths := 0; sourceDir[0] := 0X; varsize := 0; selfName[0] := 0X; nofFriends := 0
 END ORB.

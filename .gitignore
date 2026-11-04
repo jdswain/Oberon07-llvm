@@ -70,11 +70,15 @@ self/*/ORG_rt.c
 self/*/main.c
 # ...but the 816 driver is hand-written source, not generated:
 !self/s816/main.c
+self/llvm/ORH.Mod
 self/llvm/ORS.Mod
 self/llvm/ORB.Mod
+self/llvm/ORPS.Mod
 self/llvm/ORP.Mod
+self/s816/ORH.Mod
 self/s816/ORS.Mod
 self/s816/ORB.Mod
+self/s816/ORPS.Mod
 self/s816/ORP.Mod
 self/*/*.o
 self/*/*.smb

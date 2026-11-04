@@ -708,6 +708,39 @@ static void InType(Files_Rider *R, ObjectPtr thismod, TypePtr *T) {
     }
 }
 
+/* The module compiled and its friends (MODULE M FRIENDS A, B): the modules
+   that may assign to its variables. The symbol file lists them after its
+   objects, where a reader of the objects alone stops (self/ORB.Mod). */
+#define maxFriends 8
+static char selfName[ORS_IDENT_LEN];
+static char friends[maxFriends][ORS_IDENT_LEN];
+static int nofFriends = 0;
+
+void ORB_SetModule(const char *name) {
+    strncpy(selfName, name, ORS_IDENT_LEN - 1); selfName[ORS_IDENT_LEN - 1] = 0;
+    nofFriends = 0;
+}
+
+void ORB_AddFriend(const char *name) {
+    if (nofFriends < maxFriends) {
+        strncpy(friends[nofFriends], name, ORS_IDENT_LEN - 1);
+        friends[nofFriends][ORS_IDENT_LEN - 1] = 0;
+        nofFriends++;
+    } else ORS_Mark("too many friends");
+}
+
+/* the next friend's name: false after the last (an empty name, or the end) */
+static bool ReadFriend(Files_Rider *R, char *name) {
+    int i = 0; BYTE b;
+    Files_ReadByte(R, &b);
+    while (!R->eof && b != 0) {
+        if (i < ORS_IDENT_LEN - 1) name[i++] = (char)b;
+        Files_ReadByte(R, &b);
+    }
+    name[i] = 0;
+    return i > 0;
+}
+
 void Import(char *modid, char *modid1) {
     int32_t key = 0;  /* Initialize to 0 */
     int class, k;
@@ -774,6 +807,17 @@ void Import(char *modid, char *modid1) {
                 obj->next = thismod->dsc;
                 thismod->dsc = obj;
                 Read(&R, &class);
+            }
+            {
+                char friend[ORS_IDENT_LEN]; bool friendly = false;
+                while (ReadFriend(&R, friend)) {
+                    if (strcmp(friend, selfName) == 0) friendly = true;
+                }
+                if (friendly) {   /* its variables may be assigned to here */
+                    for (obj = thismod->dsc; obj != NULL; obj = obj->next) {
+                        if (obj->class == ORB_Var) obj->rdo = false;
+                    }
+                }
             }
             
             Files_Register(F);
@@ -1047,10 +1091,10 @@ void Export(const char *modid, BOOLEAN *newSF, int32_t *key) {
         obj = obj->next;
     }
     
-    /* Pad to 4-byte boundary */
-    do {
-        Write(&R, 0);
-    } while (Files_Length(F) % 4 != 0);
+    /* the end of the objects, the friends, then pad to 4-byte boundary */
+    Write(&R, 0);
+    for (int i = 0; i < nofFriends; i++) Files_WriteString(&R, friends[i]);
+    while (Files_Length(F) % 4 != 0) Write(&R, 0);
     
     /* Clear type table */
     for (Ref = ORB_Record + 1; Ref < maxTypTab; Ref++) {

@@ -243,6 +243,13 @@ body = body.replace(
     "void ORG__Close(Ident modid, LONGINT key, LONGINT nofent) {",
     "void ORG__Close(const char *modid, INTEGER modid_len, LONGINT key, LONGINT nofent) {\n    (void)modid_len;")
 
+# For1 without y: the 65C816 backend passes at most 14 words, and a
+# record is four (self/s816/ORG.Mod's For1); C's never read y
+body = body.replace(
+    "void ORG__For1(ORG_Item *x, ORG_Item *y, ORG_Item *z, ORG_Item *w, LONGINT *L) {\n    (void)y;",
+    "void ORG__For1(ORG_Item *x, ORG_Item *z, ORG_Item *w, LONGINT *L) {")
+assert "ORG__For1(ORG_Item *x, ORG_Item *z" in body, "gen_bridge: ORG_For1's signature changed"
+
 # mname is an embedded array in the mirror, not a pointer
 body = body.replace(
     "if (proc->class == ORB_Meth && proc->mname) {",

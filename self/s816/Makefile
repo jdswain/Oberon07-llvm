@@ -28,16 +28,20 @@ RT_SMB := $(RT)/Errors.smb $(RT)/Out.smb $(RT)/Files.smb
 CC     := clang
 CFLAGS := -std=c11 -Wall -Wno-unused-parameter -Wno-unused-function -g
 
-MODS := ORS ORB OCG ORGFP ORGW ORG ORP
+MODS := ORH ORS ORB OCG ORGFP ORGW ORGI ORGE ORG ORPS ORP
 OBJS := $(MODS:%=%.o) main.o
 
 all: oc816
 
 # Copy the shared frontend in from ../ (masters live there).
+ORH.Mod: ../ORH.Mod
+	cp ../ORH.Mod .
 ORS.Mod: ../ORS.Mod
 	cp ../ORS.Mod .
 ORB.Mod: ../ORB.Mod
 	cp ../ORB.Mod .
+ORPS.Mod: ../ORPS.Mod
+	cp ../ORPS.Mod .
 ORP.Mod: ../ORP.Mod
 	cp ../ORP.Mod .
 
@@ -57,7 +61,9 @@ $(RT)/Files.smb: $(RT)/Files.Mod $(RT)/Errors.smb
 # subroutine library, imports only OCG) and ORGW (the .816 module serializer,
 # imports OCG/ORB/Files) are both peeled out of ORG and build after OCG/ORB
 # and before ORG (which imports them).
-ORS.o: ORS.Mod $(RT_SMB)
+ORH.o: ORH.Mod $(RT_SMB)
+	$(OC0) -s ORH.Mod
+ORS.o: ORS.Mod ORH.o
 	$(OC0) -s ORS.Mod
 ORB.o: ORB.Mod ORS.o
 	$(OC0) -s ORB.Mod
@@ -65,11 +71,17 @@ OCG.o: OCG.Mod
 	$(OC0) -s OCG.Mod
 ORGFP.o: ORGFP.Mod OCG.o
 	$(OC0) -s ORGFP.Mod
-ORGW.o: ORGW.Mod OCG.o ORB.o
+ORGW.o: ORGW.Mod OCG.o ORB.o ORH.o
 	$(OC0) -s ORGW.Mod
-ORG.o: ORG.Mod OCG.o ORGFP.o ORGW.o ORB.o
+ORGI.o: ORGI.Mod OCG.o ORGFP.o ORGW.o ORB.o ORH.o
+	$(OC0) -s ORGI.Mod
+ORGE.o: ORGE.Mod ORGI.o
+	$(OC0) -s ORGE.Mod
+ORG.o: ORG.Mod ORGE.o ORGI.o OCG.o ORGFP.o ORGW.o ORB.o
 	$(OC0) -s ORG.Mod
-ORP.o: ORP.Mod ORG.o
+ORPS.o: ORPS.Mod ORG.o
+	$(OC0) -s ORPS.Mod
+ORP.o: ORP.Mod ORPS.o
 	$(OC0) -s ORP.Mod
 
 main.o: main.c
@@ -83,6 +95,6 @@ oc816: $(OBJS) $(RT_SMB)
 	    $(RT)/Files_rt.c $(RT)/Out_rt.c $(RT)/runtime.c
 
 clean:
-	rm -f *.o *.smb *.ll *.deps oc816 ORS.Mod ORB.Mod ORP.Mod
+	rm -f *.o *.smb *.ll *.deps oc816 ORH.Mod ORS.Mod ORB.Mod ORPS.Mod ORP.Mod
 
 .PHONY: all clean

@@ -2841,7 +2841,17 @@ static void ORP_Module(void) {
         } else {
             ORS_Mark("identifier expected");
         }
+        ORB_SetModule(modid);
         if (sym == ORS_large) ORS_Get(&sym);  /* MODULE m LARGE; — LLVM backend ignores the model */
+        /* MODULE m FRIENDS a, b; the modules that may assign to m's variables.
+           FRIENDS is not a reserved word */
+        if (sym == ORS_ident && strcmp(ORS_id, "FRIENDS") == 0) {
+            do {
+                ORS_Get(&sym);
+                if (sym == ORS_ident) { ORB_AddFriend(ORS_id); ORS_Get(&sym); }
+                else ORS_Mark("identifier expected");
+            } while (sym == ORS_comma);
+        }
         Check(ORS_semicolon, "no ;");
         level = 0;
         exno = 1;
