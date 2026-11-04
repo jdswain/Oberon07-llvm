@@ -424,6 +424,9 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     VAR form, size: LONGINT;
   BEGIN
     form := proc.type.base.form; size := curFrameSize;
+    (* an INTEGER result of a LONGINT function widened, as an assignment
+       would (RETURN -1 set only the low word) *)
+    IF form = ORB.Int THEN ORGI.cvt(x, ORGI.IsLong(proc.type.base)) END;
     IF form # ORB.NoTyp THEN ORGI.load(x) END;
     IF ~curIntProc THEN
       ORGI.Set16(TRUE, TRUE);
