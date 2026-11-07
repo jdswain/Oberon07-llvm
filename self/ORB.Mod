@@ -16,7 +16,7 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
 
   IMPORT Files, ORH, ORS;
 
-  CONST versionkey* = 6; maxTypTab = 64;
+  CONST versionkey* = 6; maxTypTab = 128;   (* a type's reference is a signed byte in the symbol file: up to 127 *)
     maxFriends = 8;   (* the modules a module's header names as its friends *)   (* v6: methods carry exno (816 cross-module) *)
     MnLength = 104;  (* mangled Mod__Type__Name *)
 
