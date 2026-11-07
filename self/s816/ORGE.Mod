@@ -619,6 +619,22 @@ MODULE ORGE FRIENDS ORG; (* 65C816 code generator, its expressions: type
     OCG.gen1(OCG.BNE * 32 + OCG.mPCR, loopTop)
   END genDivLoop;
 
+  (* x and y into registers for a division by a variable. A field
+     through a pointer (RegI), loaded, frees its pointer's second register
+     as if it were the topmost. So the one whose registers are on top is
+     loaded first: y if it holds any (computed, or a pointer's), and then
+     x without freeing y's; else x, then y above it. (y was loaded first
+     always, and a field x through a pointer under it freed y's register:
+     p.f DIV n wrote the quotient over the divisor.) *)
+  PROCEDURE loadOperands(VAR x, y: ORGI.Item);
+    VAR top: LONGINT;
+  BEGIN
+    IF (y.mode = ORGI.Reg) OR (y.mode = ORGI.RegI) THEN
+      ORGI.load(y); top := ORGI.RH; ORGI.load(x); IF ORGI.RH < top THEN ORGI.RH := top END
+    ELSE ORGI.load(x); ORGI.load(y)
+    END
+  END loadOperands;
+
   PROCEDURE DivOp*(op: LONGINT; VAR x, y: ORGI.Item);
     VAR e, i, divisorReg, quotientReg: LONGINT;
   BEGIN
@@ -654,9 +670,10 @@ MODULE ORGE FRIENDS ORG; (* 65C816 code generator, its expressions: type
         ELSE ORS.Mark("bad divisor")
         END
       ELSE
-        ORGI.load(y);
-        IF ORGI.check THEN ORGI.Trap(ORGI.LE, 6) END;
-        ORGI.load(x);
+        loadOperands(x, y);
+        IF ORGI.check THEN   (* the divisor's flags: it was not the last loaded if it was in a register *)
+          ORGI.Set16(TRUE, TRUE); OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(y.r)); ORGI.Trap(ORGI.LE, 6)
+        END;
         quotientReg := ORGI.RH; ORGI.incR;
         genDivLoop(x.r, y.r, quotientReg);
         (* the quotient into the lower of x's and y's registers, those above
@@ -705,9 +722,10 @@ MODULE ORGE FRIENDS ORG; (* 65C816 code generator, its expressions: type
         ELSE ORS.Mark("bad modulus")
         END
       ELSE
-        ORGI.load(y);
-        IF ORGI.check THEN ORGI.Trap(ORGI.LE, 6) END;
-        ORGI.load(x);
+        loadOperands(x, y);
+        IF ORGI.check THEN   (* the divisor's flags: it was not the last loaded if it was in a register *)
+          ORGI.Set16(TRUE, TRUE); OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(y.r)); ORGI.Trap(ORGI.LE, 6)
+        END;
         quotientReg := ORGI.RH; ORGI.incR;
         genDivLoop(x.r, y.r, quotientReg);
         (* the remainder, in x's register, into the lower of x's and y's *)
