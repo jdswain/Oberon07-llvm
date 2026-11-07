@@ -13,19 +13,22 @@ MODULE ORGFP; (* 65C816 floating-point subroutine library — companion to ORG.
     CodeOrg = 0;   (* .816 code base offset; RealOp JSR fixups are absolute *)
     (* FP workspace DP addresses *)
     FP_A_LO* = 22H; FP_A_HI* = 24H; FP_B_LO* = 26H; FP_B_HI* = 28H;
-    FP_SIGN = 2AH; FP_EXP = 2CH; FP_M1_LO = 2EH; FP_M1_HI = 30H;
+    FP_SIGN* = 2AH; FP_EXP = 2CH; FP_M1_LO = 2EH; FP_M1_HI = 30H;
     FP_M2_LO = 32H; FP_M2_HI = 34H; FP_PROD0 = 36H; FP_PROD1 = 38H;
     FP_PROD2 = 3AH; FP_TEMP = 3CH; FP_TEMP2 = 3EH; FP_CNT = 40H;
     (* FP operation indices *)
     FP_ADD* = 0; FP_MUL* = 1; FP_DIV* = 2; FP_CMP* = 3;
     FP_FLOOR* = 4; FP_FLT* = 5;
     (* LONGINT operations, which share the workspace and the fixups:
-       L_MUL: A := A * B;  L_DIV: A := A DIV B, B := A MOD B (B > 0) *)
-    L_MUL* = 6; L_DIV* = 7; FP_OPS = 8;
-    maxFPFixups = 256;
+       L_MUL: A := A * B;  L_DIV: A := A DIV B, B := A MOD B (B > 0);
+       I_DIV: the same of INTEGERs, FP_A_LO and FP_B_LO *)
+    L_MUL* = 6; L_DIV* = 7; I_DIV* = 8; FP_OPS = 9;
+    maxFixups = 2048;         (* the calls of all of them, a module's *)
 
   VAR
-    fpFixups: ARRAY FP_OPS, maxFPFixups OF LONGINT;
+    fixAt: ARRAY maxFixups OF LONGINT;   (* where a call's address goes *)
+    fixOp: ARRAY maxFixups OF BYTE;      (* and what it calls *)
+    nFix: INTEGER;
     fpFixupCount: ARRAY FP_OPS OF INTEGER;
     fpSubAddr: ARRAY FP_OPS OF LONGINT;
     full: BOOLEAN;   (* a call did not fit the fixup table *)
@@ -44,7 +47,7 @@ MODULE ORGFP; (* 65C816 floating-point subroutine library — companion to ORG.
 
   PROCEDURE Init*;
     VAR i: INTEGER;
-  BEGIN full := FALSE;
+  BEGIN full := FALSE; nFix := 0;
     FOR i := 0 TO FP_OPS - 1 DO fpFixupCount[i] := 0 END
   END Init;
 
@@ -52,10 +55,15 @@ MODULE ORGFP; (* 65C816 floating-point subroutine library — companion to ORG.
   BEGIN RETURN full
   END Full;
 
+  (* a call to idx fits the fixup table *)
+  PROCEDURE Room*(idx: INTEGER): BOOLEAN;
+  BEGIN RETURN nFix < maxFixups
+  END Room;
+
   PROCEDURE AddFixup*(idx: INTEGER);
   BEGIN
-    IF fpFixupCount[idx] < maxFPFixups THEN
-      fpFixups[idx, fpFixupCount[idx]] := OCG.Here() + 1;
+    IF nFix < maxFixups THEN
+      fixAt[nFix] := OCG.Here() + 1; fixOp[nFix] := idx; nFix := nFix + 1;
       fpFixupCount[idx] := fpFixupCount[idx] + 1
     ELSE full := TRUE
     END
@@ -915,6 +923,58 @@ MODULE ORGFP; (* 65C816 floating-point subroutine library — companion to ORG.
     OCG.Rts
   END emitL_DIV;
 
+  (* A := A DIV B, B := A MOD B of INTEGERs (FP_A_LO, FP_B_LO), B > 0, as
+     L_DIV: restoring division of |A|, 16 steps, the remainder in FP_M1_LO;
+     for a negative A, q = -q' - 1 and r = B - r' if r' # 0, else q = -q'.
+     (The division inline was unsigned: -360 DIV 20 gave 3258.) *)
+  PROCEDURE emitI_DIV;
+    VAR loop, p1, p2, p3: LONGINT;
+  BEGIN
+    OCG.SetLongA(TRUE); OCG.SetLongI(TRUE);
+    fpSubAddr[I_DIV] := OCG.Here();
+    OCG.gen1(OCG.STZ * 32 + OCG.mDP, FP_SIGN);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_A_LO);
+    p1 := emitFwdBranch(OCG.BPL);
+    OCG.gen1(OCG.EOR * 32 + OCG.mImm, 0FFFFH); OCG.Clc; OCG.gen1(OCG.ADC * 32 + OCG.mImm, 1);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_A_LO);
+    OCG.gen1(OCG.DEC * 32 + OCG.mDP, FP_SIGN);
+    patch(p1);
+    OCG.gen1(OCG.STZ * 32 + OCG.mDP, FP_M1_LO);
+    OCG.gen1(OCG.LDX * 32 + OCG.mImm, 16);
+    loop := OCG.Here();
+    OCG.gen1(OCG.ASL * 32 + OCG.mDP, FP_A_LO);
+    OCG.gen1(OCG.ROL * 32 + OCG.mDP, FP_M1_LO);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_M1_LO);
+    OCG.Sec;
+    OCG.gen1(OCG.SBC * 32 + OCG.mDP, FP_B_LO);
+    p1 := emitFwdBranch(OCG.BCC);            (* remainder < B: no subtraction *)
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_M1_LO);
+    OCG.gen1(OCG.INC * 32 + OCG.mDP, FP_A_LO);
+    patch(p1);
+    OCG.Dex;
+    OCG.gen1(OCG.BNE * 32 + OCG.mPCR, loop);
+    OCG.gen1(OCG.BIT * 32 + OCG.mDP, FP_SIGN);
+    p1 := emitFwdBranch(OCG.BPL);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_M1_LO);
+    p2 := emitFwdBranch(OCG.BEQ);
+    OCG.Sec;
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_B_LO);
+    OCG.gen1(OCG.SBC * 32 + OCG.mDP, FP_M1_LO);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_M1_LO);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_A_LO);
+    OCG.gen1(OCG.EOR * 32 + OCG.mImm, 0FFFFH);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_A_LO);
+    p3 := emitFwdBranch(OCG.BRA);
+    patch(p2);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_A_LO);
+    OCG.gen1(OCG.EOR * 32 + OCG.mImm, 0FFFFH); OCG.Clc; OCG.gen1(OCG.ADC * 32 + OCG.mImm, 1);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_A_LO);
+    patch(p3); patch(p1);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_M1_LO);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_B_LO);
+    OCG.Rts
+  END emitI_DIV;
+
   PROCEDURE EmitSubroutines*;
   BEGIN
     IF fpFixupCount[FP_FLOOR] > 0 THEN emitFP_FLOOR END;
@@ -924,23 +984,18 @@ MODULE ORGFP; (* 65C816 floating-point subroutine library — companion to ORG.
     IF fpFixupCount[FP_DIV] > 0 THEN emitFP_DIV END;
     IF fpFixupCount[FP_CMP] > 0 THEN emitFP_CMP END;
     IF fpFixupCount[L_MUL] > 0 THEN emitL_MUL END;
-    IF fpFixupCount[L_DIV] > 0 THEN emitL_DIV END
+    IF fpFixupCount[L_DIV] > 0 THEN emitL_DIV END;
+    IF fpFixupCount[I_DIV] > 0 THEN emitI_DIV END
   END EmitSubroutines;
 
   PROCEDURE FixupCalls*;
-    VAR op, i, pos, addr: LONGINT;
-  BEGIN
-    op := 0;
-    WHILE op < FP_OPS DO
-      i := 0;
-      WHILE i < fpFixupCount[op] DO
-        pos := fpFixups[op, i] - CodeOrg;
-        addr := fpSubAddr[op];
-        OCG.Patch(pos, addr MOD 100H);
-        OCG.Patch(pos + 1, addr DIV 100H MOD 100H);
-        i := i + 1
-      END;
-      op := op + 1
+    VAR i, pos, addr: LONGINT;
+  BEGIN i := 0;
+    WHILE i < nFix DO
+      pos := fixAt[i] - CodeOrg; addr := fpSubAddr[fixOp[i]];
+      OCG.Patch(pos, addr MOD 100H);
+      OCG.Patch(pos + 1, addr DIV 100H MOD 100H);
+      i := i + 1
     END
   END FixupCalls;
 END ORGFP.
