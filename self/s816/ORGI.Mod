@@ -1517,11 +1517,17 @@ MODULE ORGI FRIENDS ORGE, ORG; (* 65C816 code generator, its items: the
   PROCEDURE CopyString*(VAR x, y: Item);
     VAR len, loopStart: LONGINT;
   BEGIN
-    loadAdr(x); len := x.type.len;
-    IF len >= 0 THEN
-      IF len < y.b THEN ORS.Mark("string too long") END
-    ELSIF check THEN Trap(LT, 3)
+    len := x.type.len;
+    IF (len < 0) & check & ((x.mode = ORB.Var) OR (x.mode = ORB.Par)) THEN
+      (* an open array: its length, the word after its address and bank,
+         at least the string's (with its 0X), else trap 3 *)
+      Set16(TRUE, TRUE);
+      OCG.gen1(OCG.LDA * 32 + OCG.mSR, x.a + 4 + frame);
+      OCG.gen1(OCG.CMP * 32 + OCG.mImm, y.b);
+      Trap(GE, 3)
     END;
+    loadAdr(x);
+    IF (len >= 0) & (len < y.b) THEN ORS.Mark("string too long") END;
     loadStringAdr(y);
     OCG.gen1(OCG.LDA * 32 + OCG.mDP, BANK_DP); OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH)); incR;
     Set8(TRUE, FALSE); Set16(FALSE, TRUE);
