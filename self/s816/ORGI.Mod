@@ -69,6 +69,7 @@ MODULE ORGI FRIENDS ORGE, ORG; (* 65C816 code generator, its items: the
 
   VAR
     varsize*: LONGINT;   (* = ORG_varsize; set by SetDataSize *)
+    strBank*: LONGINT;   (* the DP address of the bank of the string loadStringAdr loaded: BANK_DP, or SB_TEMP_BANK, an import's *)
     strx*, entry*, RH*, frame*: LONGINT;
     check*: BOOLEAN;
     largeMod*: BOOLEAN;  (* MODULE m LARGE: far (JSL/RTL) internal calls, >64K code *)
@@ -971,12 +972,23 @@ MODULE ORGI FRIENDS ORGE, ORG; (* 65C816 code generator, its items: the
     x.mode := ORB.Var; x.a := T.len; x.r := -T.mno; loadAdr(x)
   END loadTypTagAdr;
 
+  (* a string constant's address in a register; its bank's in strBank. An
+     imported one's (x.r < 0) is in its module's data, at x.a from its
+     static base *)
   PROCEDURE loadStringAdr*(VAR x: Item);
+    VAR sb: LONGINT;
   BEGIN
     Set16(TRUE, TRUE);
-    OCG.gen1(OCG.LDA * 32 + OCG.mDP, SB_DP);
-    OCG.Clc;
-    OCG.gen1(OCG.ADC * 32 + OCG.mImm, varsize + x.a);
+    IF (x.type.form = ORB.String) & (x.r < 0) THEN
+      sb := GetSB(x.r); strBank := BankOf(sb);
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, sb);
+      OCG.Clc;
+      OCG.gen1(OCG.ADC * 32 + OCG.mImm, x.a)
+    ELSE strBank := BANK_DP;
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, SB_DP);
+      OCG.Clc;
+      OCG.gen1(OCG.ADC * 32 + OCG.mImm, varsize + x.a)
+    END;
     OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH));
     x.mode := Reg; x.r := RH; incR
   END loadStringAdr;
@@ -996,7 +1008,7 @@ MODULE ORGI FRIENDS ORGE, ORG; (* 65C816 code generator, its items: the
   PROCEDURE MakeStringItem*(VAR x: Item; len: LONGINT);
     VAR i: LONGINT;
   BEGIN
-    x.mode := ORB.Const; x.type := ORB.strType; x.a := strx; x.b := len;
+    x.mode := ORB.Const; x.type := ORB.strType; x.a := strx; x.b := len; x.r := 0;
     IF strx + len < maxStrx THEN
       i := 0;
       WHILE len > 0 DO
@@ -1061,7 +1073,10 @@ MODULE ORGI FRIENDS ORGE, ORG; (* 65C816 code generator, its items: the
     x.isMeth := FALSE; x.dynDisp := FALSE; x.ifaceDisp := FALSE;   (* clear stale OO state on reuse *)
     x.mode := y.class; x.type := y.type; x.a := y.val; x.rdo := y.rdo;
     IF y.class = ORB.Par THEN x.b := 0
-    ELSIF (y.class = ORB.Const) & (y.type.form = ORB.String) THEN x.b := y.lev
+    ELSIF (y.class = ORB.Const) & (y.type.form = ORB.String) THEN
+      IF y.lev < 0 THEN x.r := y.lev; x.b := y.type.len   (* imported: its module, its length *)
+      ELSE x.r := 0; x.b := y.lev
+      END
     ELSIF (y.class = ORB.Const) &
           ((y.type.form = ORB.Array) OR (y.type.form = ORB.Record)) THEN
       IF y.lev < 0 THEN x.mode := ORB.Var; x.r := y.lev; x.rdo := TRUE END;
@@ -1529,7 +1544,7 @@ MODULE ORGI FRIENDS ORGE, ORG; (* 65C816 code generator, its items: the
     loadAdr(x);
     IF (len >= 0) & (len < y.b) THEN ORS.Mark("string too long") END;
     loadStringAdr(y);
-    OCG.gen1(OCG.LDA * 32 + OCG.mDP, BANK_DP); OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH)); incR;
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, strBank); OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH)); incR;
     Set8(TRUE, FALSE); Set16(FALSE, TRUE);
     OCG.gen1(OCG.LDY * 32 + OCG.mImm, 0);
     loopStart := OCG.Here();

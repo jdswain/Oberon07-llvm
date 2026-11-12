@@ -1087,7 +1087,7 @@ MODULE ORGE FRIENDS ORG; (* 65C816 code generator, its expressions: type
   BEGIN
     IF x.type.form = ORB.String THEN
       ORGI.loadStringAdr(x);
-      OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.BANK_DP);
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.strBank);
       OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(ORGI.RH)); ORGI.incR
     ELSE ORGI.loadAdr(x)
     END
@@ -1200,14 +1200,10 @@ MODULE ORGE FRIENDS ORG; (* 65C816 code generator, its expressions: type
 
   PROCEDURE StringParam*(VAR x: ORGI.Item);
   BEGIN
-    ORGI.Set16(TRUE, TRUE);
-    OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.SB_DP);
-    OCG.Clc;
-    OCG.gen1(OCG.ADC * 32 + OCG.mImm, ORGI.varsize + x.a);
+    ORGI.loadStringAdr(x);   (* x in a register, its bank's after it *)
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.strBank);
     OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(ORGI.RH));
-    OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.BANK_DP);
-    OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(ORGI.RH + 1));
-    x.mode := ORGI.Reg; x.r := ORGI.RH; ORGI.incR; ORGI.incR;
+    ORGI.incR;
     ORGI.Set16(TRUE, TRUE);
     OCG.gen1(OCG.LDA * 32 + OCG.mImm, x.b);
     OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(ORGI.RH));

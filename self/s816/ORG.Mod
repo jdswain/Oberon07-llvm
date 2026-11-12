@@ -1080,12 +1080,18 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   END Adr;
 
   PROCEDURE Bank*(VAR x: ORGI.Item);
+    VAR sb: LONGINT;
   BEGIN
     IF (x.mode = ORB.Var) OR (x.mode = ORB.Par) OR (x.mode = ORGI.RegI) THEN
       ORGI.loadAdr(x); ORGI.Set16(TRUE, TRUE);
       OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(x.r + 1));
       OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(x.r));
       ORGI.RH := ORGI.RH - 1
+    ELSIF (x.mode = ORB.Const) & (x.type.form = ORB.String) & (x.r < 0) THEN   (* an imported string: its module's bank *)
+      sb := ORGI.GetSB(x.r);
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.BankOf(sb));
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(ORGI.RH));
+      x.mode := ORGI.Reg; x.r := ORGI.RH; ORGI.incR
     ELSIF (x.mode = ORB.Const) &
           ((x.type.form = ORB.Array) OR (x.type.form = ORB.Record) OR (x.type.form = ORB.String)) THEN
       ORGI.Set16(TRUE, TRUE);

@@ -646,7 +646,7 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
   END ReadFriend;
 
   PROCEDURE Import*(modid, modid1: ARRAY OF CHAR);
-    VAR key: LONGINT;
+    VAR key, len: LONGINT;
       class, k: INTEGER;
       obj, old: Object;
       t: Type;
@@ -689,6 +689,8 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
             IF class = Const THEN
               IF obj.type.form = Real THEN
                 RInt(R, obj.val)
+              ELSIF obj.type.form = String THEN   (* its offset in its module's data, and its length: a type of its own *)
+                RNum(R, obj.val); RNum(R, len); NEW(t); t^ := obj.type^; t.len := len; obj.type := t
               ELSE RNum(R, obj.val)
               END
             ELSIF class = Var THEN
@@ -899,6 +901,8 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
             WInt(R, obj.val)
           ELSIF (obj.type.form = Array) OR (obj.type.form = Record) THEN
             WNum(R, varsize + obj.val)
+          ELSIF obj.type.form = String THEN   (* in the data, as a structured constant; its length *)
+            WNum(R, varsize + obj.val); WNum(R, obj.lev)
           ELSE WNum(R, obj.val)
           END
         ELSIF obj.class = Var THEN
