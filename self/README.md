@@ -43,7 +43,8 @@ makes code for Verilog65C816's core with its extension after WDM
 
 - an INTEGER `*` by UML;
 - `DIV` and `MOD` by DIV, which rounds down as Oberon's do;
-- a LONGINT `*` by three UMLs;
+- a LONGINT `*` by three UMLs, a REAL `*` by four (the mantissas' halves)
+  and its exponents' shifts by LSR #7;
 - a LONGINT `DIV` and `MOD` by one DIV when both are 16-bit numbers, else
   by UDV in parts, a divisor of 10000H or more still a bit a step;
 - a multiply, `DIV` or shift by a constant power of 2 by ASL, LSR or ASR
