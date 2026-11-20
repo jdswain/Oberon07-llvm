@@ -36,9 +36,9 @@ cd s816 && make      # -> oc816    (65C816 backend; pure Oberon, no libLLVM)
 | Memory management | ARC | GC (mark/sweep, later stage) |
 | Output | `.ll` / `.o` | self-contained relocatable `.816` |
 
-`oc816 Module.Mod [-s] [-m] [-x] [-I dir]`: `-s` allows a new symbol
-file, `-m` writes `Module.map` (each procedure's code offset), and `-x`
-makes code for Verilog65C816's core with its extension after WDM
+`oc816 Module.Mod [-s] [-m] [-x | -816] [-I dir]`: `-s` allows a new
+symbol file, `-m` writes `Module.map` (each procedure's code offset), and
+`-x` makes code for Verilog65C816's core with its extension after WDM
 (its `docs/65C832.md`; `OCG.xops`):
 
 - an INTEGER `*` by UML;
@@ -52,6 +52,14 @@ makes code for Verilog65C816's core with its extension after WDM
 
 That code runs only on such a core (em16 -fpga). Without `-x` the code is
 as it was, byte for byte. OS16 is compiled with `-x`.
+
+By default the code is for the board's core with its banked direct page
+and stack (`WDM #$B1`, Verilog65C816's `docs/BankedDP.md`), as OS16 runs
+it: D's high byte is the bank of both. `-816` (`OCG.stock`) makes code for
+a stock 65C816, both in bank 0 and D any address there: a local's address
+has bank 0 (`ORGI.stackBank`), and a local beyond `d,S`'s 255 bytes is
+reached at `S + v - D` (`OCG.bigX`). It excludes `-x`; a stock 65C816 has
+no extension.
 
 The 816 loads every module into one bank; dynamic-dispatch vtables and
 interface itables use loader-filled absolute in-bank addresses. Type

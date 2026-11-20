@@ -877,14 +877,18 @@ MODULE ORGI FRIENDS ORGE, ORG; (* 65C816 code generator, its items: the
 
   (* reg := the stack's bank, D's high byte: the board's banked direct page
      and stack (WDM #$B1) put the stack in that bank; unbanked, D is 0 (the
-     boot ROM), and so is the bank. A local variable's address goes with it. *)
+     boot ROM), and so is the bank. A local variable's address goes with it.
+     On a stock 65C816 (-816) the stack is in bank 0 whatever D is. *)
   PROCEDURE stackBank*(reg: LONGINT);
   BEGIN
     Set16(TRUE, TRUE);
-    OCG.gen1(OCG.TDC * 32 + OCG.mImpl, 0);
-    OCG.Xba;
-    OCG.gen1(OCG.AND * 32 + OCG.mImm, 0FFH);
-    OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(reg))
+    IF OCG.stock THEN OCG.gen1(OCG.STZ * 32 + OCG.mDP, RegAddr(reg))
+    ELSE
+      OCG.gen1(OCG.TDC * 32 + OCG.mImpl, 0);
+      OCG.Xba;
+      OCG.gen1(OCG.AND * 32 + OCG.mImm, 0FFH);
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(reg))
+    END
   END stackBank;
 
   PROCEDURE loadAdr*(VAR x: Item);

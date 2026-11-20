@@ -87,6 +87,7 @@ MODULE OCG; (* 65C816 instruction encoder.
     relocC: INTEGER;
     fault: BOOLEAN;            (* a fixed buffer (code/reloc) overflowed *)
     xops*: BOOLEAN;            (* -x: code for the core with its extension after WDM *)
+    stock*: BOOLEAN;           (* -816: code for a stock 65C816, its direct page and stack in bank 0 *)
 
   (* --- byte emission --- *)
 
@@ -218,14 +219,17 @@ MODULE OCG; (* 65C816 instruction encoder.
      and stack (WDM #$B1) both are in D's bank, the direct page at
      Lo(D) * 100H, so X := S + v - Lo(D) * 100H and LDA $00,X reaches the
      stack's bank, as a local's address does (ORG.stackBank). Not
-     $000000,X: that is bank 0, and the kernel's variables are there.
-     16-bit A, which is lost. *)
+     $000000,X: that is bank 0, and the kernel's variables are there. On a
+     stock 65C816 (-816) both are in bank 0, the direct page at D: X := S
+     + v - D. 16-bit A, which is lost. *)
   PROCEDURE bigX(v: LONGINT);
   BEGIN
     o(0DAH);                            (* PHX *)
     o(7BH);                             (* TDC *)
-    o(29H); o(0FFH); o(0);              (* AND #$00FF *)
-    o(0EBH);                            (* XBA: Lo(D) * 100H *)
+    IF ~stock THEN
+      o(29H); o(0FFH); o(0);            (* AND #$00FF *)
+      o(0EBH)                           (* XBA: Lo(D) * 100H *)
+    END;
     o(49H); o(0FFH); o(0FFH);           (* EOR #$FFFF *)
     o(1AH);                             (* INC A: its negative *)
     o(48H);                             (* PHA *)
@@ -677,6 +681,13 @@ MODULE OCG; (* 65C816 instruction encoder.
   PROCEDURE SetXops*(on: BOOLEAN);
   BEGIN xops := on
   END SetXops;
+
+  (* -816, for a driver in Oberon (main.c sets stock): code for a stock
+     65C816, without the board's banked direct page and stack (WDM #$B1,
+     Verilog65C816's docs/BankedDP.md), so a local's bank is 0; not with -x *)
+  PROCEDURE SetStock*(on: BOOLEAN);
+  BEGIN stock := on
+  END SetStock;
 
   (* a multiply or divide, sel xMUL, xUML, xDIV or xUDV * 32 and mDP or
      mImm: $42, then that instruction *)
