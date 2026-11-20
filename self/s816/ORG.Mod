@@ -727,6 +727,15 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   PROCEDURE BankPair(VAR addr, other: ORGI.Item);
     VAR i: LONGINT;
   BEGIN ORGI.load(addr); ORGI.Set16(TRUE, TRUE);
+    IF ORGI.IsLong(addr.type) THEN
+      (* a LONGINT address: its low word, the high word's register freed
+         (those above it, other's, moved down one) *)
+      FOR i := addr.r + 1 TO ORGI.RH - 2 DO
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(i + 1)); OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(i))
+      END;
+      IF ((other.mode = ORGI.Reg) OR (other.mode = ORGI.RegI)) & (other.r > addr.r) THEN other.r := other.r - 1 END;
+      ORGI.RH := ORGI.RH - 1; addr.type := ORB.intType
+    END;
     IF addr.r < ORGI.RH - 1 THEN
       OCG.gen1(OCG.LDX * 32 + OCG.mDP, ORGI.RegAddr(addr.r));
       FOR i := addr.r TO ORGI.RH - 2 DO
