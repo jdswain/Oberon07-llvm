@@ -29,7 +29,7 @@ MODULE ORGI FRIENDS ORGE, ORG; (* 65C816 code generator, its items: the
     Reg* = 10; RegI* = 11; Cond* = 12;
 
     (* condition codes *)
-    MI* = 0; PL = 8; EQ* = 1; NE* = 9; LT* = 5; GE* = 13;
+    MI* = 0; PL* = 8; EQ* = 1; NE* = 9; LT* = 5; GE* = 13;
     LE* = 6; GT* = 14; AL* = 7; NV = 15;
 
     maxForNest* = 8;        (* max nested FOR loops with a non-const limit *)
@@ -416,7 +416,20 @@ MODULE ORGI FRIENDS ORGE, ORG; (* 65C816 code generator, its items: the
       OCG.gen1(OCG.LDY * 32 + OCG.mImm, a + off + 2);
       OCG.gen1(OCG.LDA * 32 + OCG.mDPIndLY, sb);
       OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(dst + 1))
-    ELSE   (* local Var or by-value Par: stack-frame relative *)
+    ELSIF mode = ORB.Par THEN   (* a VAR parameter: through its address *)
+      OCG.gen1(OCG.LDA * 32 + OCG.mSR, a + frame);
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(dst));
+      OCG.gen1(OCG.LDA * 32 + OCG.mSR, a + 2 + frame);
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(dst + 1));
+      OCG.gen1(OCG.LDY * 32 + OCG.mImm, b + off + 2);
+      OCG.gen1(OCG.LDA * 32 + OCG.mDPIndLY, RegAddr(dst));
+      OCG.Pha;
+      OCG.gen1(OCG.LDY * 32 + OCG.mImm, b + off);
+      OCG.gen1(OCG.LDA * 32 + OCG.mDPIndLY, RegAddr(dst));
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(dst));
+      OCG.Pla;
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(dst + 1))
+    ELSE   (* local Var: stack-frame relative *)
       OCG.gen1(OCG.LDA * 32 + OCG.mSR, a + off + frame);
       OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(dst));
       OCG.gen1(OCG.LDA * 32 + OCG.mSR, a + off + 2 + frame);
@@ -547,7 +560,7 @@ MODULE ORGI FRIENDS ORGE, ORG; (* 65C816 code generator, its items: the
           OCG.gen1(OCG.LDA * 32 + OCG.mImm, Hi16(x.a));
           OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH + 1));
           x.r := RH; incR; incR
-        ELSIF (x.a <= 0FFFFH) & (x.a >= -10000H) THEN
+        ELSE   (* an INTEGER or a BYTE: the constant's low bits, of a wide one too *)
           IF x.type.size = 1 THEN
             Set8(TRUE, FALSE);
             OCG.gen1(OCG.LDA * 32 + OCG.mImm, x.a MOD 100H);
@@ -560,8 +573,6 @@ MODULE ORGI FRIENDS ORGE, ORG; (* 65C816 code generator, its items: the
             OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH))
           END;
           x.r := RH; incR
-        ELSE
-          x.r := RH; incR   (* wide constant: unsupported path, matches C stub *)
         END
       ELSIF x.mode = ORB.Var THEN
         IF x.r > 0 THEN
@@ -1137,7 +1148,18 @@ MODULE ORGI FRIENDS ORGE, ORG; (* 65C816 code generator, its items: the
       END
     END;
     IF runtime THEN
-      cvt(y, FALSE);   (* a LONGINT index: its low word *)
+      IF (y.mode = ORB.Const) & ((y.a < 0) OR (y.a > 0FFFFH)) THEN ORS.Mark("bad index")
+      ELSIF IsLong(y.type) & (y.mode # ORB.Const) THEN
+        (* a LONGINT index: its high word must be 0, then its low word is the index *)
+        load(y);
+        IF check THEN
+          Set16(TRUE, TRUE);
+          OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(y.r + 1));
+          Trap(EQ, 1)
+        END;
+        RH := RH - 1; y.type := ORB.intType
+      END;
+      cvt(y, FALSE);
       load(y);
       IF check THEN
         IF lim >= 0 THEN
@@ -1523,8 +1545,12 @@ MODULE ORGI FRIENDS ORGE, ORG; (* 65C816 code generator, its items: the
            counter) and Y (the byte index) are 16-bit. LEN(y) is at the
            param's length slot, y.a + 4 + frame (same as Len). *)
         Set16(TRUE, TRUE);
-        OCG.gen1(OCG.LDY * 32 + OCG.mImm, 0);
         OCG.gen1(OCG.LDA * 32 + OCG.mSR, y.a + 4 + frame);   (* A := element count *)
+        IF check THEN   (* LEN(y) <= LEN(x), else trap 1, as an index *)
+          OCG.gen1(OCG.CMP * 32 + OCG.mImm, x.type.len + 1);
+          Trap(LT, 1)
+        END;
+        OCG.gen1(OCG.LDY * 32 + OCG.mImm, 0);
         i := 0;
         WHILE i < k DO OCG.gen1(OCG.ASL * 32 + OCG.mImpl, 0); i := i + 1 END; (* *elemSize *)
         OCG.gen1(OCG.LSR * 32 + OCG.mImpl, 0);               (* DIV 2 = wordCount, C odd *)

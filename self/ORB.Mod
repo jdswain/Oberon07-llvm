@@ -604,6 +604,7 @@ MODULE ORB; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
 
       Files.ReadString(R, modname);
       IF modname[0] # 0X THEN  (*re-import*)
+        IF modname = selfName THEN ORS.Mark("recursive import") END;
         RInt(R, key);
         Files.ReadString(R, name);
         mod := ThisModule(modname, modname, FALSE, key);

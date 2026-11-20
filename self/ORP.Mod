@@ -25,6 +25,9 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
       next: PtrBase
     END;
 
+    CElem = POINTER TO CElemDesc;   (*an element of a constant array*)
+    CElemDesc = RECORD val: LONGINT; next: CElem END;
+
     TypeProc = PROCEDURE (VAR type: ORB.Type);
     FormalTypeProc = PROCEDURE (VAR typ: ORB.Type; dim: INTEGER);
 
@@ -290,7 +293,7 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
       mname: ORS.Ident;
   BEGIN
     NEW(typ); typ.form := ORB.Intfc;
-    typ.size := 16;   (* fat pointer {data, itable} *)
+    typ.size := ORG.IntfcSize;   (* fat pointer {data, itable} *)
     typ.mno := -ORPS.level;
     tail := NIL; slot := 0;
     WHILE (ORPS.sym = ORS.ident) OR (ORPS.sym = ORS.procedure) DO
@@ -450,6 +453,7 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
       id: ORS.Ident;
       reorderOfs, cstart, ccount, cval: LONGINT;
       p: ORB.Object;
+      cl, ce, cv: CElem;
   BEGIN
     (*sync*)
     pbsList := NIL;
@@ -475,28 +479,38 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
           ORPS.qualident(tobj);
           IF tobj.class = ORB.Typ THEN tp := tobj.type
           ELSE ORS.Mark("not a type"); tp := ORB.intType END;
-          cstart := ORG.StrOffset(); ccount := 0;
+          ccount := 0; cl := NIL;
+          IF (tp.size # 1) & (tp.size # 2) THEN ORS.Mark("element type must be 1 or 2 bytes") END;
           IF ORPS.sym = ORS.lbrace THEN
             ORS.Get(ORPS.sym);
             WHILE (ORPS.sym # ORS.rbrace) & (ORPS.sym # ORS.eot) DO
               ORPS.expression(x);
+              IF (x.type.form = ORB.String) & (x.b = 2) THEN ORG.StrToChar(x) END;
               IF x.mode = ORB.Const THEN cval := x.a
               ELSE ORS.Mark("not a constant"); cval := 0 END;
-              IF tp.size = 1 THEN ORG.PutByte(cval)
-              ELSIF tp.size = 2 THEN
-                ORG.PutByte(cval); ORG.PutByte(cval DIV 100H)
-              ELSE ORS.Mark("element type must be 1 or 2 bytes") END;
+              NEW(ce); ce.val := cval; ce.next := cl; cl := ce;
               INC(ccount);
               IF ORPS.sym = ORS.comma THEN ORS.Get(ORPS.sym)
               ELSIF ORPS.sym # ORS.rbrace THEN ORS.Mark(", or } expected") END
             END;
             ORPS.Check(ORS.rbrace, "} expected")
           ELSE ORS.Mark("{ expected") END;
+          (* the elements after the strings their expressions put in the
+             data, in order *)
+          ce := NIL;
+          WHILE cl # NIL DO cv := cl; cl := cl.next; cv.next := ce; ce := cv END;
+          cstart := ORG.StrOffset();
+          WHILE ce # NIL DO
+            IF tp.size = 1 THEN ORG.PutByte(ce.val)
+            ELSIF tp.size = 2 THEN ORG.PutByte(ce.val); ORG.PutByte(ce.val DIV 100H)
+            END;
+            ce := ce.next
+          END;
           NEW(arrtyp); arrtyp.form := ORB.Array; arrtyp.base := tp;
           arrtyp.len := ccount; arrtyp.size := ccount * tp.size;
           ORB.NewObj(obj, id, ORB.Const);
           obj.expo := expo; obj.val := cstart;
-          obj.lev := ccount * tp.size; obj.type := arrtyp;
+          obj.lev := ccount * tp.size; obj.type := arrtyp; obj.rdo := TRUE;
           IF expo THEN obj.exno := exno; INC(exno) END
         ELSE
           ORPS.expression(x);
@@ -504,7 +518,8 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
           ORB.NewObj(obj, id, ORB.Const);
           obj.expo := expo;
           IF x.mode = ORB.Const THEN
-            obj.val := x.a; obj.lev := x.b; obj.type := x.type
+            obj.val := x.a; obj.lev := x.b; obj.type := x.type;
+            obj.rdo := (x.type.form = ORB.Array) OR (x.type.form = ORB.Record)
           ELSE
             ORS.Mark("expression not constant"); obj.type := ORB.intType
           END
@@ -790,9 +805,11 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
       type.form := ORB.Proc; type.size := 4;
       proc.type := type; proc.val := -1; proc.lev := ORPS.level;
       ORPS.CheckExport(proc.expo);
-      (* exported methods also get an export-entry number so importers can
-         reference them by mno:exno (816 cross-module dispatch) *)
-      IF proc.expo THEN proc.exno := exno; INC(exno) END;
+      (* exported methods, and every method but an initialiser that is
+         not, also get an export-entry number so importers can reference
+         them by mno:exno (816 cross-module dispatch: an extension's
+         vtable holds its base's methods, exported or not) *)
+      IF proc.expo OR hasRcv & ~isInit THEN proc.exno := exno; INC(exno) END;
       ORB.OpenScope;
       INC(ORPS.level);
       type.base := ORB.noType;
@@ -991,7 +1008,7 @@ MODULE ORP; (* NW 25.6.2014 / AP 4.3.2020 / 8.3.2019 in Oberon-07.
         END
       ELSE impid1 := impid
       END;
-      ORB.Import(impid, impid1)
+      IF impid1 = modid THEN ORS.Mark("recursive import") ELSE ORB.Import(impid, impid1) END
     ELSE ORS.Mark("id expected")
     END
   END Import;

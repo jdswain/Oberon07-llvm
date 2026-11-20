@@ -174,7 +174,7 @@ MODULE ORS; (* NW 19.9.93 / 15.3.2017  Scanner in Oberon-07.
       negE: BOOLEAN;
   BEGIN ival := 0; i := 0; n := 0; k := 0;
     REPEAT
-      IF n < 16 THEN d[n] := ORD(ch)-30H; INC(n) ELSE Mark("too many digits"); n := 0 END;
+      IF n < 16 THEN d[n] := ORD(ch)-30H; INC(n) ELSE Mark("too many digits") END;
       Read
     UNTIL (ch < "0") OR (ch > "9") & (ch < "A") OR (ch > "F");
     IF (ch = "H") OR (ch = "R") OR (ch = "X") THEN  (*hex*)
@@ -253,7 +253,7 @@ MODULE ORS; (* NW 19.9.93 / 15.3.2017  Scanner in Oberon-07.
   PROCEDURE Get*(VAR sym: INTEGER);
   BEGIN
     REPEAT
-      WHILE ~srcEof & (ch <= " ") DO Read END;
+      WHILE ~srcEof & (ch <= " ") & (ch >= 0X) DO Read END;  (*not 80X and above, if CHARs compare signed*)
       IF srcEof THEN sym := eot
       ELSIF ch < "A" THEN
         IF ch < "0" THEN
@@ -271,7 +271,7 @@ MODULE ORS; (* NW 19.9.93 / 15.3.2017  Scanner in Oberon-07.
           ELSIF ch = "." THEN Read;
             IF ch = "." THEN Read; sym := upto ELSE sym := period END
           ELSIF ch = "/" THEN Read; sym := rdiv
-          ELSE Read; (* ! % ' *) sym := null
+          ELSE Mark("illegal character"); Read; (* ! % ' *) sym := null
           END
         ELSIF ch < ":" THEN Number(sym)
         ELSIF ch = ":" THEN Read;
@@ -282,14 +282,14 @@ MODULE ORS; (* NW 19.9.93 / 15.3.2017  Scanner in Oberon-07.
         ELSIF ch = "=" THEN Read; sym := eql
         ELSIF ch = ">" THEN Read;
           IF ch = "=" THEN Read; sym := geq ELSE sym := gtr END
-        ELSE (* ? @ *) Read; sym := null
+        ELSE (* ? @ *) Mark("illegal character"); Read; sym := null
         END
       ELSIF ch < "[" THEN Identifier(sym)
       ELSIF ch < "a" THEN
         IF ch = "[" THEN sym := lbrak
         ELSIF ch = "]" THEN sym := rbrak
         ELSIF ch = "^" THEN sym := arrow
-        ELSE (* _ ` *) sym := null
+        ELSE (* _ ` *) Mark("illegal character"); sym := null
         END;
         Read
       ELSIF ch < "{" THEN Identifier(sym) ELSE
@@ -298,7 +298,7 @@ MODULE ORS; (* NW 19.9.93 / 15.3.2017  Scanner in Oberon-07.
         ELSIF ch = "|" THEN sym := bar
         ELSIF ch = "~" THEN sym := not
         ELSIF ch = 7FX THEN sym := upto
-        ELSE sym := null
+        ELSE Mark("illegal character"); sym := null
         END;
         Read
       END

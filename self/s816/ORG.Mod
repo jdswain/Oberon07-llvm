@@ -49,7 +49,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
        frame/expo/int; Enter and its Return never nest across another
        Enter, so single module vars suffice) *)
     curFrameSize: LONGINT;
-    curExpo, curIntProc: BOOLEAN;
+    curExpo: BOOLEAN;
 
 
   (* --- calls & procedure frame --- *)
@@ -77,7 +77,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   END RestoreRegs;
 
   PROCEDURE PrepCall*(VAR x: ORGI.Item; VAR r: LONGINT);
-    VAR rcv: ORGI.Item;
+    VAR rcv: ORGI.Item; k: LONGINT;
   BEGIN
     IF x.ifaceDisp THEN
       (* interface dispatch: save outer context, then load the fat value's data
@@ -87,6 +87,25 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       IF ORGI.RH > 0 THEN SaveRegs(ORGI.RH); ORGI.RH := 0 END;
       ORGI.loadIfacePair(x.rcvMode, x.rcvA, x.rcvB, x.rcvR, 0, 0);
       ORGI.RH := 2
+    ELSIF x.isMeth & (x.rcvMode = ORGI.RegI) & (x.type.dsc.class = ORB.Par) THEN
+      (* VAR-record receiver reached through a pointer or a computed
+         index, its address in [rcvR, rcvR+1]: param 0 is the record's
+         address+bank+tag, made there by VarParam and moved to R0..R3 *)
+      r := x.rcvR;
+      IF x.rcvR > 0 THEN SaveRegs(x.rcvR) END;
+      ORGI.RH := x.rcvR;
+      rcv.mode := ORGI.RegI; rcv.a := x.rcvA; rcv.b := x.rcvB; rcv.r := x.rcvR;
+      rcv.rdo := x.rcvRdo; rcv.type := x.rcvType; rcv.isMeth := FALSE;
+      ORGE.VarParam(rcv, rcv.type);
+      IF x.rcvR # 0 THEN
+        k := 0;
+        WHILE k < 4 DO
+          OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(x.rcvR + k));
+          OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(k));
+          INC(k)
+        END
+      END;
+      ORGI.RH := 4
     ELSIF x.isMeth & ((x.rcvMode = ORGI.Reg) OR (x.rcvMode = ORGI.RegI)) THEN
       (* receiver already in registers [rcvR, rcvR+1] — a DeRef'd pointer
          (dynamic dispatch / SUPER) or a freshly-allocated instance (a
@@ -125,6 +144,11 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
          itable from the interface designator, index it by the interface method
          index (methSlot) to get the record's vtable slot, then dispatch through
          the object's vtable exactly like dynamic dispatch (runtime slot). *)
+      IF ORGI.check THEN   (* a NIL interface: trap as a NIL pointer does *)
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(0));
+        OCG.gen1(OCG.ORA * 32 + OCG.mDP, ORGI.RegAddr(1));
+        ORGI.Trap(ORGI.NE, 4)
+      END;
       addrReg := ORGI.RegAddr(ORGI.RH);
       ORGI.loadIfacePair(x.rcvMode, x.rcvA, x.rcvB, x.rcvR, 4, ORGI.RH + 6);  (* itable ptr *)
       OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(ORGI.RH + 6));
@@ -324,98 +348,93 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
        The far path also saves/resets SB, which is what makes an imported
        method run with its own module's static base. *)
     curFrameSize := frameSize; curExpo := proc.expo OR (proc.class = ORB.Meth);
-    curIntProc := intProc;
     forDepth := 0;
     (* a method keeps its vtable slot in .val, so record its compiled entry
        address in .backend for BuildTD/Close to wire into the vtable *)
     IF proc.class = ORB.Meth THEN proc.backend := OCG.Here() END;
-    IF ~intProc THEN
-      IF frameSize >= 4000H THEN ORS.Mark("too many locals") END;
-      ORGI.Set16(TRUE, TRUE);
-      IF curExpo THEN
-        OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.SB_DP);
-        OCG.Pha;
-        OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.BANK_DP);
-        OCG.Pha;
-        OCG.AddRel(OCG.Here());
-        OCG.gen1(OCG.LDA * 32 + OCG.mImm, 0);
-        OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.SB_DP);
-        OCG.AddRel(OCG.Here() + 80000000H);
-        OCG.gen1(OCG.LDA * 32 + OCG.mImm, 0);
-        OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.BANK_DP)
+    (* an interrupt procedure, PROCEDURE*, would have to keep the
+       interrupted code's registers, direct page and static base as Switch.s
+       does; it is not implemented *)
+    IF intProc THEN ORS.Mark("interrupt procedures not implemented") END;
+    IF frameSize >= 4000H THEN ORS.Mark("too many locals") END;
+    ORGI.Set16(TRUE, TRUE);
+    IF curExpo THEN
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.SB_DP);
+      OCG.Pha;
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.BANK_DP);
+      OCG.Pha;
+      OCG.AddRel(OCG.Here());
+      OCG.gen1(OCG.LDA * 32 + OCG.mImm, 0);
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.SB_DP);
+      OCG.AddRel(OCG.Here() + 80000000H);
+      OCG.gen1(OCG.LDA * 32 + OCG.mImm, 0);
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.BANK_DP)
+    END;
+    IF frameSize > 0 THEN
+      OCG.Tsc;
+      OCG.Sec;
+      OCG.gen1(OCG.SBC * 32 + OCG.mImm, frameSize);
+      OCG.Tcs
+    END;
+    (* the parameters, from their registers to the frame: nofpar of them
+       (the receiver counted). params is the whole scope, the locals
+       after them, and a local is a Var too: not stored, garbage, and
+       with a big frame beyond d,S's reach *)
+    r := 0; param := params; n := proc.type.nofpar; ORGI.Set16(TRUE, TRUE);
+    WHILE (param # NIL) & (n > 0) & ((param.class = ORB.Var) OR (param.class = ORB.Par)) DO
+      IF (param.class = ORB.Par) & (param.type.form = ORB.Array) & (param.type.len < 0) THEN
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r));
+        OCG.gen1(OCG.STA * 32 + OCG.mSR, param.val);
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r + 1));
+        OCG.gen1(OCG.STA * 32 + OCG.mSR, param.val + 2);
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r + 2));
+        OCG.gen1(OCG.STA * 32 + OCG.mSR, param.val + 4)
+      ELSIF (param.class = ORB.Par) & (param.type.form = ORB.Record) THEN
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r));
+        OCG.gen1(OCG.STA * 32 + OCG.mSR, param.val);
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r + 1));
+        OCG.gen1(OCG.STA * 32 + OCG.mSR, param.val + 2);
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r + 2));
+        OCG.gen1(OCG.STA * 32 + OCG.mSR, param.val + 4);
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r + 3));
+        OCG.gen1(OCG.STA * 32 + OCG.mSR, param.val + 6)
+      ELSIF param.class = ORB.Par THEN
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r));
+        OCG.gen1(OCG.STA * 32 + OCG.mSR, param.val);
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r + 1));
+        OCG.gen1(OCG.STA * 32 + OCG.mSR, param.val + 2)
+      ELSIF (param.type.form = ORB.Real) OR (param.type.form = ORB.Proc) THEN
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r));
+        OCG.gen1(OCG.STA * 32 + OCG.mSR, param.val);
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r + 1));
+        OCG.gen1(OCG.STA * 32 + OCG.mSR, param.val + 2)
+      ELSIF param.type.form = ORB.Intfc THEN
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r));
+        OCG.gen1(OCG.STA * 32 + OCG.mSR, param.val);
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r + 1));
+        OCG.gen1(OCG.STA * 32 + OCG.mSR, param.val + 2);
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r + 2));
+        OCG.gen1(OCG.STA * 32 + OCG.mSR, param.val + 4);
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r + 3));
+        OCG.gen1(OCG.STA * 32 + OCG.mSR, param.val + 6)
+      ELSE
+        ORGI.MakeItem(paramItem, param, param.lev);
+        regItem.mode := ORGI.Reg; regItem.type := param.type;
+        regItem.r := r; regItem.rdo := TRUE;
+        ORGI.Store(paramItem, regItem)
       END;
-      IF frameSize > 0 THEN
-        OCG.Tsc;
-        OCG.Sec;
-        OCG.gen1(OCG.SBC * 32 + OCG.mImm, frameSize);
-        OCG.Tcs
+      IF (param.class = ORB.Par) & (param.type.form = ORB.Array) & (param.type.len < 0) THEN
+        r := r + 3
+      ELSIF (param.class = ORB.Par) & (param.type.form = ORB.Record) THEN
+        r := r + 4
+      ELSIF param.class = ORB.Par THEN r := r + 2
+      ELSIF param.type.form = ORB.Intfc THEN r := r + 4
+      ELSIF param.type.size <= 2 THEN r := r + 1
+      ELSE r := r + 2
       END;
-      (* the parameters, from their registers to the frame: nofpar of them
-         (the receiver counted). params is the whole scope, the locals
-         after them, and a local is a Var too: not stored, garbage, and
-         with a big frame beyond d,S's reach *)
-      r := 0; param := params; n := proc.type.nofpar; ORGI.Set16(TRUE, TRUE);
-      WHILE (param # NIL) & (n > 0) & ((param.class = ORB.Var) OR (param.class = ORB.Par)) DO
-        IF (param.class = ORB.Par) & (param.type.form = ORB.Array) & (param.type.len < 0) THEN
-          OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r));
-          OCG.gen1(OCG.STA * 32 + OCG.mSR, param.val);
-          OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r + 1));
-          OCG.gen1(OCG.STA * 32 + OCG.mSR, param.val + 2);
-          OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r + 2));
-          OCG.gen1(OCG.STA * 32 + OCG.mSR, param.val + 4)
-        ELSIF (param.class = ORB.Par) & (param.type.form = ORB.Record) THEN
-          OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r));
-          OCG.gen1(OCG.STA * 32 + OCG.mSR, param.val);
-          OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r + 1));
-          OCG.gen1(OCG.STA * 32 + OCG.mSR, param.val + 2);
-          OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r + 2));
-          OCG.gen1(OCG.STA * 32 + OCG.mSR, param.val + 4);
-          OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r + 3));
-          OCG.gen1(OCG.STA * 32 + OCG.mSR, param.val + 6)
-        ELSIF param.class = ORB.Par THEN
-          OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r));
-          OCG.gen1(OCG.STA * 32 + OCG.mSR, param.val);
-          OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r + 1));
-          OCG.gen1(OCG.STA * 32 + OCG.mSR, param.val + 2)
-        ELSIF (param.type.form = ORB.Real) OR (param.type.form = ORB.Proc) THEN
-          OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r));
-          OCG.gen1(OCG.STA * 32 + OCG.mSR, param.val);
-          OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r + 1));
-          OCG.gen1(OCG.STA * 32 + OCG.mSR, param.val + 2)
-        ELSIF param.type.form = ORB.Intfc THEN
-          OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r));
-          OCG.gen1(OCG.STA * 32 + OCG.mSR, param.val);
-          OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r + 1));
-          OCG.gen1(OCG.STA * 32 + OCG.mSR, param.val + 2);
-          OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r + 2));
-          OCG.gen1(OCG.STA * 32 + OCG.mSR, param.val + 4);
-          OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r + 3));
-          OCG.gen1(OCG.STA * 32 + OCG.mSR, param.val + 6)
-        ELSE
-          ORGI.MakeItem(paramItem, param, param.lev);
-          regItem.mode := ORGI.Reg; regItem.type := param.type;
-          regItem.r := r; regItem.rdo := TRUE;
-          ORGI.Store(paramItem, regItem)
-        END;
-        IF (param.class = ORB.Par) & (param.type.form = ORB.Array) & (param.type.len < 0) THEN
-          r := r + 3
-        ELSIF (param.class = ORB.Par) & (param.type.form = ORB.Record) THEN
-          r := r + 4
-        ELSIF param.class = ORB.Par THEN r := r + 2
-        ELSIF param.type.form = ORB.Intfc THEN r := r + 4
-        ELSIF param.type.size <= 2 THEN r := r + 1
-        ELSE r := r + 2
-        END;
-        param := param.next; DEC(n)
-      END;
-      ORGI.RH := 0
-    ELSE
-      IF frameSize > 0 THEN
-        OCG.Sec;
-        OCG.gen1(OCG.SBC * 32 + OCG.mImm, frameSize);
-        OCG.Tcs
-      END
-    END
+      param := param.next; DEC(n)
+    END;
+    ORGI.RH := 0
   END Enter;
 
   (* Shared-frontend signature: (proc, x). form/size/expo/int from proc
@@ -428,34 +447,25 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
        would (RETURN -1 set only the low word) *)
     IF form = ORB.Int THEN ORGI.cvt(x, ORGI.IsLong(proc.type.base)) END;
     IF form # ORB.NoTyp THEN ORGI.load(x) END;
-    IF ~curIntProc THEN
-      ORGI.Set16(TRUE, TRUE);
-      IF size > 0 THEN
-        OCG.Tsc;
-        OCG.Clc;
-        OCG.gen1(OCG.ADC * 32 + OCG.mImm, size);
-        OCG.Tcs
-      END;
-      (* SB save/restore is only for genuinely cross-module-reachable procs
-         (curExpo); an intra-module large-model proc runs with the caller's
-         SB (same module) so it skips the dance. The far RETURN convention
-         (RTL) is separate: needed whenever the proc is reached by a long
-         call — every proc in a LARGE module is. *)
-      IF curExpo THEN
-        OCG.Pla;
-        OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.BANK_DP);
-        OCG.Pla;
-        OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.SB_DP)
-      END;
-      IF curExpo OR ORGI.largeMod THEN OCG.Rtl ELSE OCG.Rts END
-    ELSE
-      IF size > 0 THEN
-        OCG.Clc;
-        OCG.gen1(OCG.ADC * 32 + OCG.mImm, size);
-        OCG.Tcs
-      END;
-      OCG.Rti
+    ORGI.Set16(TRUE, TRUE);
+    IF size > 0 THEN
+      OCG.Tsc;
+      OCG.Clc;
+      OCG.gen1(OCG.ADC * 32 + OCG.mImm, size);
+      OCG.Tcs
     END;
+    (* SB save/restore is only for genuinely cross-module-reachable procs
+       (curExpo); an intra-module large-model proc runs with the caller's
+       SB (same module) so it skips the dance. The far RETURN convention
+       (RTL) is separate: needed whenever the proc is reached by a long
+       call — every proc in a LARGE module is. *)
+    IF curExpo THEN
+      OCG.Pla;
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.BANK_DP);
+      OCG.Pla;
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.SB_DP)
+    END;
+    IF curExpo OR ORGI.largeMod THEN OCG.Rtl ELSE OCG.Rts END;
     ORGI.RH := 0
   END Return;
 
@@ -689,23 +699,82 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     IF HeapNew(baseType, px) THEN z := px; z.type := y.type; ORGI.Store(y, z) END
   END New;
 
+  (* A shifted n bits, op ASL or LSR *)
+  PROCEDURE shiftA(op, n: LONGINT);
+    VAR i: LONGINT;
+  BEGIN
+    IF OCG.xops THEN OCG.ShiftA(op, n)
+    ELSE FOR i := 1 TO n DO OCG.gen1(op * 32 + OCG.mAcc, 0) END
+    END
+  END shiftA;
+
+  (* PACK(x, n): x := x * 2^n, n added to the exponent of x, a REAL in
+     IEEE single format, its bits 7..14 of the high word. 0 stays 0; the
+     result is not checked for overflow. *)
   PROCEDURE Pack*(VAR x, y: ORGI.Item);
-    VAR z: ORGI.Item;
-  BEGIN z := x; ORGI.load(x); ORGI.load(y); ORGI.RH := ORGI.RH - 1; ORGI.Store(z, x)
+    VAR skip, n: LONGINT;
+  BEGIN
+    IF y.mode # ORB.Const THEN ORGI.cvt(y, FALSE); ORGI.load(y); n := 1 ELSE n := 0 END;
+    ORGI.loadAdr(x); ORGI.Set16(TRUE, TRUE);
+    IF n = 1 THEN
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(y.r));
+      shiftA(OCG.ASL, 7);
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(y.r))
+    END;
+    OCG.gen1(OCG.LDY * 32 + OCG.mImm, 2);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDPIndLY, ORGI.RegAddr(x.r));
+    OCG.gen1(OCG.AND * 32 + OCG.mImm, 7F80H);
+    skip := ORGI.emitFwdBranch(OCG.BEQ);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDPIndLY, ORGI.RegAddr(x.r));
+    OCG.Clc;
+    IF n = 1 THEN OCG.gen1(OCG.ADC * 32 + OCG.mDP, ORGI.RegAddr(y.r))
+    ELSE OCG.gen1(OCG.ADC * 32 + OCG.mImm, y.a * 128 MOD 10000H)
+    END;
+    OCG.gen1(OCG.STA * 32 + OCG.mDPIndLY, ORGI.RegAddr(x.r));
+    ORGI.patch(skip);
+    ORGI.RH := ORGI.RH - 2 - n
   END Pack;
 
+  (* UNPK(x, n): n := the exponent of x, x := its mantissa, 1.0 <= x < 2.0
+     with the sign of x; the exponent field made 127. 0 gives n = 0. *)
   PROCEDURE Unpk*(VAR x, y: ORGI.Item);
-    VAR z, e0: ORGI.Item;
+    VAR e: ORGI.Item; skip: LONGINT;
   BEGIN
-    z := x; ORGI.load(x);
-    e0.mode := ORGI.Reg; e0.r := ORGI.RH; e0.type := ORB.intType;
-    ORGI.Store(y, e0);
-    ORGI.incR;
-    ORGI.Store(z, x)
+    ORGI.loadAdr(x); ORGI.Set16(TRUE, TRUE);
+    e.mode := ORGI.Reg; e.r := ORGI.RH; e.type := ORB.intType; ORGI.incR;
+    OCG.gen1(OCG.STZ * 32 + OCG.mDP, ORGI.RegAddr(e.r));
+    OCG.gen1(OCG.LDY * 32 + OCG.mImm, 2);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDPIndLY, ORGI.RegAddr(x.r));
+    OCG.gen1(OCG.AND * 32 + OCG.mImm, 7F80H);
+    skip := ORGI.emitFwdBranch(OCG.BEQ);
+    shiftA(OCG.LSR, 7);
+    OCG.Sec;
+    OCG.gen1(OCG.SBC * 32 + OCG.mImm, 127);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(e.r));
+    OCG.gen1(OCG.LDA * 32 + OCG.mDPIndLY, ORGI.RegAddr(x.r));
+    OCG.gen1(OCG.AND * 32 + OCG.mImm, 807FH);
+    OCG.gen1(OCG.ORA * 32 + OCG.mImm, 3F80H);
+    OCG.gen1(OCG.STA * 32 + OCG.mDPIndLY, ORGI.RegAddr(x.r));
+    ORGI.patch(skip);
+    ORGI.Store(y, e);
+    ORGI.RH := ORGI.RH - 2
   END Unpk;
 
+  (* INTEN(b): interrupts on, CLI, if b, else off, SEI *)
   PROCEDURE IntEn*(VAR x: ORGI.Item);
   BEGIN
+    IF x.mode = ORB.Const THEN
+      IF x.a # 0 THEN OCG.gen1(OCG.CLI * 32 + OCG.mImpl, 0) ELSE OCG.gen1(OCG.SEI * 32 + OCG.mImpl, 0) END
+    ELSE
+      ORGI.load(x); ORGI.Set16(TRUE, TRUE);
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(x.r));
+      OCG.gen1(OCG.AND * 32 + OCG.mImm, 0FFH);
+      OCG.gen1(OCG.BEQ * 32 + OCG.mPCR, OCG.Here() + 2 + 3);
+      OCG.gen1(OCG.CLI * 32 + OCG.mImpl, 0);
+      OCG.gen1(OCG.BRA * 32 + OCG.mPCR, OCG.Here() + 2 + 1);
+      OCG.gen1(OCG.SEI * 32 + OCG.mImpl, 0);
+      ORGI.RH := ORGI.RH - 1
+    END
   END IntEn;
 
   (* SYSTEM.GET's or PUT's bank, just parsed: loaded and pushed on the
@@ -769,14 +838,16 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   END Put;
 
   PROCEDURE Copy*(VAR x, y, z: ORGI.Item);
-    VAR loopTop: LONGINT;
+    VAR loopTop, skip: LONGINT;
   BEGIN
-    ORGI.load(x); ORGI.load(y);
+    ORGI.load(x); ORGI.load(y); skip := -1;
     IF z.mode = ORB.Const THEN
       IF z.a > 0 THEN ORGI.load(z) ELSE ORS.Mark("bad count") END
     ELSE
-      ORGI.load(z);
-      IF ORGI.check THEN ORGI.Trap(ORGI.LT, 3) END
+      ORGI.load(z); ORGI.Set16(TRUE, TRUE);
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(z.r));
+      IF ORGI.check THEN ORGI.Trap(ORGI.PL, 3) END;
+      skip := ORGI.emitFwdBranch(OCG.BEQ)   (* a count of 0: nothing *)
     END;
     ORGI.Set16(TRUE, TRUE);
     OCG.gen1(OCG.LDY * 32 + OCG.mImm, 0);
@@ -789,6 +860,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     OCG.gen1(OCG.DEC * 32 + OCG.mAcc, 0);
     OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(z.r));
     OCG.gen1(OCG.BNE * 32 + OCG.mPCR, loopTop);
+    IF skip >= 0 THEN ORGI.patch(skip) END;
     ORGI.RH := ORGI.RH - 3
   END Copy;
 
@@ -856,7 +928,9 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     VAR p: LONGINT;
   BEGIN
     IF x.mode = ORB.Const THEN
-      IF x.a < 0 THEN x.a := -x.a END
+      IF x.type.form = ORB.Real THEN x.a := AND(x.a, 7FFFFFFFH)   (* the sign bit cleared *)
+      ELSIF x.a < 0 THEN x.a := -x.a
+      END
     ELSE
       ORGI.load(x);
       IF x.type.form = ORB.Real THEN
@@ -904,17 +978,31 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     ORGI.RH := ORGI.RH - 1; x.type := ORB.intType
   END Floor;
 
+  (* a constant beyond a word is a LONGINT: FLT(100000), ASL(12345678H, 4) *)
+  PROCEDURE wideConst(VAR x: ORGI.Item);
+  BEGIN
+    IF (x.mode = ORB.Const) & (x.type.form = ORB.Int) & ((x.a > 0FFFFH) OR (x.a < -8000H)) THEN
+      x.type := ORB.longType
+    END
+  END wideConst;
+
   PROCEDURE Float*(VAR x: ORGI.Item);
   BEGIN
-    ORGI.load(x); ORGI.Set16(TRUE, TRUE);
+    wideConst(x); ORGI.load(x); ORGI.Set16(TRUE, TRUE);
     OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(x.r));
     OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGFP.FP_A_LO);
-    OCG.gen1(OCG.STZ * 32 + OCG.mDP, ORGFP.FP_A_HI);
-    ORGFP.AddFixup(ORGFP.FP_FLT); OCG.gen1(OCG.JSR * 32 + OCG.mAbs, 0);
+    IF ORGI.IsLong(x.type) THEN
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(x.r + 1));
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGFP.FP_A_HI);
+      ORGFP.AddFixup(ORGFP.L_FLT); OCG.gen1(OCG.JSR * 32 + OCG.mAbs, 0)
+    ELSE
+      OCG.gen1(OCG.STZ * 32 + OCG.mDP, ORGFP.FP_A_HI);
+      ORGFP.AddFixup(ORGFP.FP_FLT); OCG.gen1(OCG.JSR * 32 + OCG.mAbs, 0);
+      ORGI.incR
+    END;
     OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGFP.FP_A_LO);
     OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(x.r));
     OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGFP.FP_A_HI);
-    ORGI.incR;
     OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(x.r + 1));
     x.type := ORB.realType
   END Float;
@@ -961,43 +1049,142 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     ORGI.RH := x.r + 1
   END binResult;
 
-  PROCEDURE Shift*(fct: LONGINT; VAR x, y: ORGI.Item);
-    VAR op, i, L: LONGINT;
+  (* register r (r, r + 1 if long) shifted one place: ASL, LSR, or ROL, a
+     rotation, bit 15 (31) into bit 0; ROR, of a LONGINT, the other way *)
+  PROCEDURE shift1(op, r: LONGINT; long: BOOLEAN);
   BEGIN
-    ORGI.load(x);
+    IF op = OCG.ROR THEN
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r));
+      OCG.gen1(OCG.LSR * 32 + OCG.mAcc, 0);
+      OCG.gen1(OCG.ROR * 32 + OCG.mDP, ORGI.RegAddr(r + 1));
+      OCG.gen1(OCG.ROR * 32 + OCG.mDP, ORGI.RegAddr(r))
+    ELSIF op = OCG.LSR THEN
+      IF long THEN
+        OCG.gen1(OCG.LSR * 32 + OCG.mDP, ORGI.RegAddr(r + 1));
+        OCG.gen1(OCG.ROR * 32 + OCG.mDP, ORGI.RegAddr(r))
+      ELSE OCG.gen1(OCG.LSR * 32 + OCG.mDP, ORGI.RegAddr(r))
+      END
+    ELSE
+      IF op = OCG.ROL THEN
+        IF long THEN OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r + 1))
+        ELSE OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r))
+        END;
+        OCG.gen1(OCG.ASL * 32 + OCG.mAcc, 0);   (* the top bit into C *)
+        OCG.gen1(OCG.ROL * 32 + OCG.mDP, ORGI.RegAddr(r))
+      ELSE OCG.gen1(OCG.ASL * 32 + OCG.mDP, ORGI.RegAddr(r))
+      END;
+      IF long THEN OCG.gen1(OCG.ROL * 32 + OCG.mDP, ORGI.RegAddr(r + 1)) END
+    END
+  END shift1;
+
+  (* a LONGINT in register r shifted n places, 0 < n < 32, ROL 8 < n < 24
+     by its words exchanged *)
+  PROCEDURE longShift(op, r, n: LONGINT);
+    VAR lo, hi, i: LONGINT;
+  BEGIN lo := ORGI.RegAddr(r); hi := ORGI.RegAddr(r + 1);
+    IF op = OCG.ROL THEN
+      IF (n > 8) & (n < 24) THEN
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, hi); OCG.Pha;
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, lo); OCG.gen1(OCG.STA * 32 + OCG.mDP, hi);
+        OCG.Pla; OCG.gen1(OCG.STA * 32 + OCG.mDP, lo); n := n - 16
+      ELSIF n >= 24 THEN n := n - 32
+      END;
+      IF n < 0 THEN op := OCG.ROR; n := -n END
+    ELSIF n >= 16 THEN   (* by a word *)
+      IF op = OCG.ASL THEN
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, lo); OCG.gen1(OCG.STA * 32 + OCG.mDP, hi);
+        OCG.gen1(OCG.STZ * 32 + OCG.mDP, lo)
+      ELSE
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, hi); OCG.gen1(OCG.STA * 32 + OCG.mDP, lo);
+        OCG.gen1(OCG.STZ * 32 + OCG.mDP, hi)
+      END;
+      n := n - 16
+    END;
+    IF OCG.xops & (op # OCG.ROL) & (op # OCG.ROR) & (n > 1) THEN
+      (* the extension's shifts by n, the bits that cross between the words
+         by 16 - n the other way *)
+      IF op = OCG.ASL THEN
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, hi); OCG.ShiftA(OCG.ASL, n); OCG.gen1(OCG.STA * 32 + OCG.mDP, hi);
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, lo); OCG.ShiftA(OCG.LSR, 16 - n);
+        OCG.gen1(OCG.ORA * 32 + OCG.mDP, hi); OCG.gen1(OCG.STA * 32 + OCG.mDP, hi);
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, lo); OCG.ShiftA(OCG.ASL, n); OCG.gen1(OCG.STA * 32 + OCG.mDP, lo)
+      ELSE
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, lo); OCG.ShiftA(OCG.LSR, n); OCG.gen1(OCG.STA * 32 + OCG.mDP, lo);
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, hi); OCG.ShiftA(OCG.ASL, 16 - n);
+        OCG.gen1(OCG.ORA * 32 + OCG.mDP, lo); OCG.gen1(OCG.STA * 32 + OCG.mDP, lo);
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, hi); OCG.ShiftA(OCG.LSR, n); OCG.gen1(OCG.STA * 32 + OCG.mDP, hi)
+      END
+    ELSE i := 0;
+      WHILE i < n DO shift1(op, r, TRUE); INC(i) END
+    END
+  END longShift;
+
+  (* ASL, LSR, ROL: of an INTEGER or a SET its 16 bits, of a LONGINT its 32.
+     A count of the width or more shifts out every bit (ROL: the count
+     modulo the width); a negative constant one shifts nothing. *)
+  PROCEDURE Shift*(fct: LONGINT; VAR x, y: ORGI.Item);
+    VAR op, i, n, w, L, p: LONGINT; long: BOOLEAN;
+  BEGIN
+    wideConst(x); ORGI.load(x); ORGI.Set16(TRUE, FALSE); long := ORGI.IsLong(x.type);
     IF fct = 0 THEN op := OCG.ASL
     ELSIF fct = 1 THEN op := OCG.LSR
     ELSE op := OCG.ROL
     END;
-    IF y.mode = ORB.Const THEN
-      IF y.a = 1 THEN OCG.gen1(op * 32 + OCG.mDP, ORGI.RegAddr(x.r))
-      ELSIF OCG.xops & (op # OCG.ROL) & (y.a > 1) & (y.a < 16) & OCG.LongA() & ~ORGI.IsLong(x.type) THEN
-        (* the extension's ASL or LSR #n (its ROL #n is not through C, as
-           ROL A is) *)
+    IF long THEN w := 32 ELSE w := 16 END;
+    IF y.mode = ORB.Const THEN n := y.a;
+      IF (op = OCG.ROL) & (n > 0) THEN n := n MOD w END;
+      IF n <= 0 THEN (* x as it is *)
+      ELSIF n >= w THEN
+        OCG.gen1(OCG.STZ * 32 + OCG.mDP, ORGI.RegAddr(x.r));
+        IF long THEN OCG.gen1(OCG.STZ * 32 + OCG.mDP, ORGI.RegAddr(x.r + 1)) END
+      ELSIF long THEN longShift(op, x.r, n)
+      ELSIF op = OCG.ROL THEN   (* a rotation of 16 bits, by 8 an exchange of the bytes *)
         OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(x.r));
-        OCG.ShiftA(op, y.a);
+        IF OCG.xops THEN OCG.ShiftA(OCG.ROL, n)   (* not through C *)
+        ELSE
+          IF n >= 8 THEN OCG.Xba; n := n - 8 END;
+          i := 0;
+          WHILE i < n DO
+            OCG.gen1(OCG.CMP * 32 + OCG.mImm, 8000H);   (* bit 15 into C *)
+            OCG.gen1(OCG.ROL * 32 + OCG.mAcc, 0);
+            INC(i)
+          END
+        END;
+        OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(x.r))
+      ELSIF n = 1 THEN OCG.gen1(op * 32 + OCG.mDP, ORGI.RegAddr(x.r))
+      ELSIF OCG.xops THEN   (* the extension's ASL or LSR #n *)
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(x.r));
+        OCG.ShiftA(op, n);
         OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(x.r))
       ELSE
         OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(x.r));
         i := 0;
-        WHILE i < y.a DO OCG.gen1(op * 32 + OCG.mImpl, 0); i := i + 1 END;
+        WHILE i < n DO OCG.gen1(op * 32 + OCG.mImpl, 0); i := i + 1 END;
         OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(x.r))
       END
     ELSE
       (* Runtime shift count: the 65C816 has no barrel shifter, so shift the
          value (in its DP register) one place at a time, counting the count
-         register down. Value and count both stay in DP; nothing else is
-         clobbered. Loop body is 6 bytes (op:2 + DEC:2 + BNE:2), so the
-         count=0 guard branches past it to Here()+2(BEQ)+6. *)
-      ORGI.load(y);
+         register (its low word) down. Value and count both stay in DP. *)
+      ORGI.load(y); ORGI.Set16(TRUE, FALSE);
       OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(y.r));      (* A := count (sets Z) *)
-      OCG.gen1(OCG.BEQ * 32 + OCG.mPCR, OCG.Here() + 8);   (* count = 0 -> skip *)
+      p := ORGI.emitFwdBranch(OCG.BEQ);                          (* count = 0 -> skip *)
       L := OCG.Here();
-      OCG.gen1(op * 32 + OCG.mDP, ORGI.RegAddr(x.r));           (* value shifted once *)
+      shift1(op, x.r, long);                                     (* value shifted once *)
       OCG.gen1(OCG.DEC * 32 + OCG.mDP, ORGI.RegAddr(y.r));      (* count-- (sets Z) *)
-      OCG.gen1(OCG.BNE * 32 + OCG.mPCR, L);                (* repeat while # 0 *)
-      OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(x.r));
-      binResult(x, y)
+      OCG.gen1(OCG.BNE * 32 + OCG.mPCR, L);                      (* repeat while # 0 *)
+      ORGI.patch(p);
+      IF long THEN   (* the value into the lower of x's and y's registers *)
+        IF y.r < x.r THEN
+          OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(x.r)); OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(y.r));
+          OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(x.r + 1)); OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(y.r + 1));
+          x.r := y.r
+        END;
+        ORGI.RH := x.r + 2
+      ELSE
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(x.r));
+        binResult(x, y)
+      END
     END
   END Shift;
 
@@ -1044,8 +1231,28 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     END
   END Bitwise;
 
+  (* UML(x, y): the unsigned product of the words x and y, a LONGINT:
+     their high words cleared and multiplied as LONGINTs *)
   PROCEDURE UML*(VAR x, y: ORGI.Item);
-  BEGIN ORGI.load(x); ORGI.load(y); ORGI.RH := ORGI.RH - 1
+    VAR d: LONGINT;
+  BEGIN
+    IF (x.mode = ORB.Const) & (y.mode = ORB.Const) THEN
+      x.a := x.a MOD 10000H * (y.a MOD 10000H); x.type := ORB.longType
+    ELSE
+      ORGI.loadLongPair(x, y); ORGI.Set16(TRUE, TRUE);
+      IF OCG.xops THEN   (* UML: the low word in A, the high in X *)
+        d := ORGI.RH - 4;
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(x.r));
+        OCG.X(OCG.xUML * 32 + OCG.mDP, ORGI.RegAddr(y.r));
+        OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(d));
+        OCG.gen1(OCG.STX * 32 + OCG.mDP, ORGI.RegAddr(d + 1));
+        ORGI.RH := ORGI.RH - 2; x.r := d; x.mode := ORGI.Reg; x.type := ORB.longType
+      ELSE
+        OCG.gen1(OCG.STZ * 32 + OCG.mDP, ORGI.RegAddr(x.r + 1));
+        OCG.gen1(OCG.STZ * 32 + OCG.mDP, ORGI.RegAddr(y.r + 1));
+        ORGI.longCall(ORGFP.L_MUL, x, y, FALSE, FALSE)
+      END
+    END
   END UML;
 
   PROCEDURE Bit*(VAR x, y: ORGI.Item);
@@ -1079,7 +1286,8 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   END Bit;
 
   PROCEDURE HH*(VAR x: ORGI.Item);
-  BEGIN x.mode := ORGI.Reg; x.r := ORGI.RH; ORGI.incR
+  BEGIN ORS.Mark("SYSTEM.H not implemented; UML gives the whole product");
+    ORGI.MakeConstItem(x, ORB.intType, 0)
   END HH;
 
   PROCEDURE Adr*(VAR x: ORGI.Item);
@@ -1118,7 +1326,8 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   END Bank;
 
   PROCEDURE Condition*(VAR x: ORGI.Item);
-  BEGIN ORGI.SetCC(x, x.a)
+  BEGIN ORS.Mark("SYSTEM.COND not implemented; write the comparison");
+    ORGI.MakeConstItem(x, ORB.boolType, 0)
   END Condition;
 
   (* --- module management --- *)
@@ -1277,26 +1486,36 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   END ForClose;
 
   (* --- OO / interface entry points: deferred to M4/M5 on this target --- *)
+  (* the type that declares m, t or a base of it, NIL if none *)
+  PROCEDURE declarer(t: ORB.Type; m: ORB.Object): ORB.Type;
+    VAR k: ORB.Object;
+  BEGIN k := NIL;
+    WHILE (t # NIL) & (k # m) DO
+      k := t.meth; WHILE (k # NIL) & (k # m) DO k := k.next END;
+      IF k # m THEN t := t.base END
+    END;
+    RETURN t
+  END declarer;
+
   PROCEDURE MethodItem*(VAR x: ORGI.Item; m: ORB.Object; direct: BOOLEAN);
-    VAR t: ORB.Type; found: BOOLEAN; k: ORB.Object;
+    VAR t: ORB.Type;
   BEGIN
     (* stash the receiver designator (current x) for PrepCall to pass as
        param 0; then turn x into the callable. *)
     x.rcvMode := x.mode; x.rcvA := x.a; x.rcvB := x.b; x.rcvR := x.r;
     x.rcvRdo := x.rdo; x.rcvType := x.type;
     x.isMeth := TRUE; x.type := m.type;
+    IF (m.type.dsc # NIL) & (m.type.dsc.class = ORB.Par) THEN
+      direct := TRUE   (* a VAR receiver binds statically, through a pointer too *)
+    END;
     IF direct THEN
       x.dynDisp := FALSE;
       (* the type that declares m, the receiver's or an ancestor: m is
          in its module, which may be another (a SUPER call to a method
          the base only inherits) *)
       t := x.rcvType; IF t.form = ORB.Pointer THEN t := t.base END;
-      found := FALSE;
-      WHILE (t # NIL) & ~found DO
-        k := t.meth; WHILE (k # NIL) & (k # m) DO k := k.next END;
-        IF k = m THEN found := TRUE ELSE t := t.base END
-      END;
-      IF found & (t.mno > 0) THEN   (* imported: JSL (mno, exno), the loader's *)
+      t := declarer(t, m);
+      IF (t # NIL) & (t.mno > 0) THEN   (* imported: JSL (mno, exno), the loader's *)
         x.mode := ORB.Const; x.a := m.exno; x.r := -t.mno
       ELSE
         x.mode := ORB.Const; x.a := m.backend; x.r := 0
@@ -1313,7 +1532,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
      as New), keep it in registers as the receiver, and set x
      to a direct call to the init body m. The init returns the receiver. *)
   PROCEDURE InitItem*(VAR x: ORGI.Item; m: ORB.Object; rec: ORB.Type);
-    VAR rh0: LONGINT; obj: ORGI.Item;
+    VAR rh0: LONGINT; obj: ORGI.Item; t: ORB.Type;
   BEGIN
     rh0 := ORGI.RH;
     IF HeapNew(rec, obj) & (obj.r # rh0) THEN
@@ -1327,7 +1546,11 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     ORGI.RH := rh0 + 2;
     x.rcvMode := ORGI.Reg; x.rcvR := rh0; x.rcvType := rec;
     x.isMeth := TRUE; x.dynDisp := FALSE; x.type := m.type;
-    x.mode := ORB.Const; x.a := m.backend; x.r := 0;
+    (* the type that declares m, rec or a base: m is in its module *)
+    t := declarer(rec, m); x.mode := ORB.Const;
+    IF (t # NIL) & (t.mno > 0) THEN x.a := m.exno; x.r := -t.mno   (* imported: JSL (mno, exno) *)
+    ELSE x.a := m.backend; x.r := 0
+    END;
     x.b := 1  (* init bodies are methods: far/RTL convention, reach via JSL *)
   END InitItem;
 
@@ -1414,7 +1637,10 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         k := k + 1
       END;
       ORGI.RH := y.r
-    ELSIF x.mode = ORGI.RegI THEN   (* through a pointer: a field of a heap object, an element *)
+    ELSIF (x.mode = ORGI.RegI) OR (x.mode = ORB.Par) THEN
+      (* through a pointer: a field of a heap object, an element; or a
+         VAR parameter, its address loaded over y *)
+      IF x.mode = ORB.Par THEN ORGI.loadAdr(x); x.a := 0 END;
       k := 0;
       WHILE k < 4 DO
         OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(y.r + k));
@@ -1422,8 +1648,8 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
         OCG.gen1(OCG.STA * 32 + OCG.mDPIndLY, ORGI.RegAddr(x.r));
         k := k + 1
       END;
-      ORGI.RH := x.r
-    ELSE   (* local Var or Par: stack-frame relative *)
+      IF x.r < y.r THEN ORGI.RH := x.r ELSE ORGI.RH := y.r END
+    ELSE   (* local Var: stack-frame relative *)
       k := 0;
       WHILE k < 4 DO
         OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(y.r + k));

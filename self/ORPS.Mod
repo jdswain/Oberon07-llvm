@@ -76,7 +76,7 @@ MODULE ORPS FRIENDS ORP; (* Oberon parser, its expressions and statements:
 
   PROCEDURE CheckReadOnly(VAR x: ORG.Item);
   BEGIN
-    IF x.rdo THEN ORS.Mark("read-only") END
+    IF x.rdo OR (x.mode = ORB.Const) THEN ORS.Mark("read-only") END
   END CheckReadOnly;
 
   PROCEDURE CheckExport*(VAR expo: BOOLEAN);
@@ -219,6 +219,7 @@ MODULE ORPS FRIENDS ORP; (* Oberon parser, its expressions and statements:
         ORG.OpenArrayParam(x)
       ELSIF (x.type.form = ORB.String) & (par.type.form = ORB.Array) &
             (par.type.base.form = ORB.Char) & (par.type.len < 0) THEN
+        IF varpar & ~par.rdo THEN ORS.Mark("read-only") END;
         ORG.StringParam(x)
       ELSIF ~varpar & (par.type.form = ORB.Int) & (x.type.form = ORB.Int) THEN
         ORG.ValueParam(x, par.type)  (* BYTE *)
@@ -227,6 +228,7 @@ MODULE ORPS FRIENDS ORP; (* Oberon parser, its expressions and statements:
         ORG.StrToChar(x); ORG.ValueParam(x, par.type)
       ELSIF (par.type.form = ORB.Array) & (par.type.base = ORB.byteType) &
             (par.type.len >= 0) & (par.type.size = x.type.size) THEN
+        IF ~par.rdo THEN CheckReadOnly(x) END;
         ORG.VarParam(x, par.type)
       ELSE ORS.Mark("incompatible parameters")
       END
@@ -467,7 +469,7 @@ MODULE ORPS FRIENDS ORP; (* Oberon parser, its expressions and statements:
           ORG.Shift(fct - 10, x, y); restyp := x.type
         ELSE ORS.Mark("bad type")
         END
-      ELSIF fct = 13 THEN ORG.UML(x, y)                (* UML *)
+      ELSIF fct = 13 THEN CheckInt(x); CheckInt(y); ORG.UML(x, y); restyp := x.type   (* UML *)
       ELSIF fct = 14 THEN  (* BIT *)
         CheckInt(x); CheckInt(y); ORG.Bit(x, y)
       ELSIF fct = 16 THEN  (* VAL *)
@@ -511,7 +513,7 @@ MODULE ORPS FRIENDS ORP; (* Oberon parser, its expressions and statements:
       ORG.MakeConstItem(x, ORB.setType, 0)  (* empty set *)
     ELSE
       element(x);
-      WHILE (sym < ORS.rparen) OR (sym > ORS.rbrace) DO
+      WHILE ((sym < ORS.rparen) OR (sym > ORS.rbrace)) & (sym # ORS.eot) DO
         IF sym = ORS.comma THEN ORS.Get(sym)
         ELSIF sym # ORS.rbrace THEN ORS.Mark("missing comma")
         END;
@@ -827,13 +829,15 @@ MODULE ORPS FRIENDS ORP; (* Oberon parser, its expressions and statements:
           ORG.StringRelation(rel, x, y)
         ELSE ORS.Mark("illegal comparison")
         END
-      ELSIF ((xf = ORB.Intfc) & (yf = ORB.NilTyp)) OR
-            ((yf = ORB.Intfc) & (xf = ORB.NilTyp)) THEN
+      ELSIF ((xf = ORB.Intfc) & ((yf = ORB.NilTyp) OR
+               (yf = ORB.Pointer) & CompTypes(x.type, y.type, FALSE))) OR
+            ((yf = ORB.Intfc) & ((xf = ORB.NilTyp) OR
+               (xf = ORB.Pointer) & CompTypes(y.type, x.type, FALSE))) THEN
         IF rel <= ORS.neq THEN ORG.IfaceRelation(rel, x, y)
         ELSE ORS.Mark("only = or #")
         END
-      ELSIF ((xf = ORB.Pointer) OR ((xf = ORB.Proc) & (yf = ORB.NilTyp))) OR
-            ((yf = ORB.Pointer) OR ((yf = ORB.Proc) & (xf = ORB.NilTyp))) THEN
+      ELSIF ((xf = ORB.Pointer) OR (xf = ORB.Proc)) & (yf = ORB.NilTyp) OR
+            ((yf = ORB.Pointer) OR (yf = ORB.Proc)) & (xf = ORB.NilTyp) THEN
         IF rel <= ORS.neq THEN ORG.IntRelation(rel, x, y)
         ELSE ORS.Mark("only = or #")
         END
@@ -891,7 +895,7 @@ MODULE ORPS FRIENDS ORP; (* Oberon parser, its expressions and statements:
     ELSE y.type := ORB.noType
     END;
     Check(ORS.rparen, "no )");
-    IF (npar = nap) OR (pno = 0) OR (pno = 1) THEN
+    IF (npar = nap) OR (pno <= 1) & (nap <= 2) THEN
       IF (pno = 0) OR (pno = 1) THEN  (* INC, DEC *)
         CheckInt(x); CheckReadOnly(x);
         IF y.type # ORB.noType THEN CheckInt(y)
@@ -922,6 +926,9 @@ MODULE ORPS FRIENDS ORP; (* Oberon parser, its expressions and statements:
         IF nap = 3 THEN ORG.GetB(x, y, z) ELSE ORG.Get(x, y) END
       ELSIF pno = 11 THEN  (* PUT: (addr,val) or 65C816 (bank,addr,val) *)
         CheckInt(x);
+        IF (nap = 3) & (z.type.form = ORB.String) THEN
+          IF z.b = 2 THEN ORG.StrToChar(z) ELSE ORS.Mark("one character only") END
+        END;
         IF nap = 3 THEN ORG.PutB(x, y, z) ELSE ORG.Put(x, y) END
       ELSIF pno = 12 THEN  (* COPY *)
         CheckInt(x); CheckInt(y); CheckInt(z); ORG.Copy(x, y, z)

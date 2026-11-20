@@ -15,14 +15,14 @@ MODULE ORGFP; (* 65C816 floating-point subroutine library — companion to ORG.
     FP_A_LO* = 22H; FP_A_HI* = 24H; FP_B_LO* = 26H; FP_B_HI* = 28H;
     FP_SIGN* = 2AH; FP_EXP = 2CH; FP_M1_LO = 2EH; FP_M1_HI = 30H;
     FP_M2_LO = 32H; FP_M2_HI = 34H; FP_PROD0 = 36H; FP_PROD1 = 38H;
-    FP_PROD2 = 3AH; FP_TEMP = 3CH; FP_TEMP2 = 3EH; FP_CNT = 40H;
+    FP_PROD2 = 3AH; FP_TEMP* = 3CH; FP_TEMP2 = 3EH; FP_CNT = 40H;
     (* FP operation indices *)
     FP_ADD* = 0; FP_MUL* = 1; FP_DIV* = 2; FP_CMP* = 3;
     FP_FLOOR* = 4; FP_FLT* = 5;
     (* LONGINT operations, which share the workspace and the fixups:
        L_MUL: A := A * B;  L_DIV: A := A DIV B, B := A MOD B (B > 0);
-       I_DIV: the same of INTEGERs, FP_A_LO and FP_B_LO *)
-    L_MUL* = 6; L_DIV* = 7; I_DIV* = 8; FP_OPS = 9;
+       I_DIV: the same of INTEGERs, FP_A_LO and FP_B_LO; L_FLT: A := FLT(A) *)
+    L_MUL* = 6; L_DIV* = 7; I_DIV* = 8; L_FLT* = 9; FP_OPS = 10;
     maxFixups = 2048;         (* the calls of all of them, a module's *)
 
   VAR
@@ -303,6 +303,91 @@ MODULE ORGFP; (* 65C816 floating-point subroutine library — companion to ORG.
     OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_A_HI);
     OCG.Rts;
   END emitFP_FLT;
+
+  (* --- L_FLT: signed 32-bit integer (FP_A_LO, FP_A_HI) → IEEE 754 single,
+     rounded to nearest, ties to even --- *)
+
+  PROCEDURE emitL_FLT;
+    VAR p1, p2, p3, loop: LONGINT;
+  BEGIN
+    OCG.SetLongA(TRUE); OCG.SetLongI(TRUE);
+    fpSubAddr[L_FLT] := OCG.Here();
+    OCG.gen1(OCG.STZ * 32 + OCG.mDP, FP_SIGN);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_A_HI);
+    p1 := emitFwdBranch(OCG.BPL);
+    OCG.gen1(OCG.LDA * 32 + OCG.mImm, 8000H);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_SIGN);
+    OCG.Sec;
+    OCG.gen1(OCG.LDA * 32 + OCG.mImm, 0);
+    OCG.gen1(OCG.SBC * 32 + OCG.mDP, FP_A_LO);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_A_LO);
+    OCG.gen1(OCG.LDA * 32 + OCG.mImm, 0);
+    OCG.gen1(OCG.SBC * 32 + OCG.mDP, FP_A_HI);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_A_HI);
+    patch(p1);
+  (* |x| in M1, its top bit to bit 31, the exponent counted down from 127 + 31 *)
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_A_LO);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_M1_LO);
+    OCG.gen1(OCG.LDA * 32 + OCG.mImm, 127 + 31);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_EXP);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_A_HI);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_M1_HI);
+    p1 := emitFwdBranch(OCG.BNE);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_M1_LO);
+    p2 := emitFwdBranch(OCG.BNE);
+    OCG.Rts;                                    (* 0: +0.0, A as it is *)
+    patch(p2);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_M1_HI);
+    OCG.gen1(OCG.STZ * 32 + OCG.mDP, FP_M1_LO);
+    OCG.gen1(OCG.LDA * 32 + OCG.mImm, 127 + 15);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_EXP);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_M1_HI);
+    patch(p1);
+    loop := OCG.Here();
+    p1 := emitFwdBranch(OCG.BMI);
+    OCG.gen1(OCG.ASL * 32 + OCG.mDP, FP_M1_LO);
+    OCG.gen1(OCG.ROL * 32 + OCG.mDP, FP_M1_HI);
+    OCG.gen1(OCG.DEC * 32 + OCG.mDP, FP_EXP);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_M1_HI);
+    OCG.gen1(OCG.BRA * 32 + OCG.mPCR, loop);
+    patch(p1);
+  (* rounded on bits 7..0: up above a half, and at a half if bit 8 is 1 *)
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_M1_LO);
+    OCG.gen1(OCG.AND * 32 + OCG.mImm, 00FFH);
+    OCG.gen1(OCG.CMP * 32 + OCG.mImm, 0080H);
+    p1 := emitFwdBranch(OCG.BCC);               (* below a half *)
+    p2 := emitFwdBranch(OCG.BNE);               (* above *)
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_M1_LO);
+    OCG.gen1(OCG.AND * 32 + OCG.mImm, 0100H);
+    p3 := emitFwdBranch(OCG.BEQ);               (* a half, even *)
+    patch(p2);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_M1_LO);
+    OCG.Clc;
+    OCG.gen1(OCG.ADC * 32 + OCG.mImm, 0100H);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_M1_LO);
+    p2 := emitFwdBranch(OCG.BCC);
+    OCG.gen1(OCG.INC * 32 + OCG.mDP, FP_M1_HI);
+    OCG.gen1(OCG.BNE * 32 + OCG.mPCR, OCG.Here() + 2 + 7);
+    OCG.gen1(OCG.LDA * 32 + OCG.mImm, 8000H);  (* 2^32: 1.0, the exponent one more *)
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_M1_HI);
+    OCG.gen1(OCG.INC * 32 + OCG.mDP, FP_EXP);
+    patch(p1); patch(p2); patch(p3);
+  (* the mantissa's low 16 bits, M1's bits 23..8 *)
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_M1_LO + 1);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_A_LO);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_M1_HI);
+    OCG.Xba;
+    OCG.gen1(OCG.AND * 32 + OCG.mImm, 007FH);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_TEMP);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_EXP);
+    OCG.Xba;
+    OCG.gen1(OCG.LSR * 32 + OCG.mAcc, 0);
+    OCG.gen1(OCG.AND * 32 + OCG.mImm, 7F80H);
+    OCG.gen1(OCG.ORA * 32 + OCG.mDP, FP_TEMP);
+    OCG.gen1(OCG.ORA * 32 + OCG.mDP, FP_SIGN);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_A_HI);
+    OCG.Rts
+  END emitL_FLT;
 
   (* --- FADD: IEEE 754 single addition --- *)
   (* FP_A + FP_B → FP_A *)
@@ -1079,15 +1164,25 @@ MODULE ORGFP; (* 65C816 floating-point subroutine library — companion to ORG.
     OCG.Rts
   END emitL_DIV;
 
-  (* A := A DIV B, B := A MOD B of INTEGERs (FP_A_LO, FP_B_LO), B > 0, as
-     L_DIV: restoring division of |A|, 16 steps, the remainder in FP_M1_LO;
-     for a negative A, q = -q' - 1 and r = B - r' if r' # 0, else q = -q'.
-     (The division inline was unsigned: -360 DIV 20 gave 3258.) *)
+  (* A := A DIV B, B := A MOD B of INTEGERs (FP_A_LO, FP_B_LO), B # 0, as
+     L_DIV: restoring division of |A| by |B|, 16 steps, the remainder in
+     FP_M1_LO; for a negative A, q = -q' - 1 and r = B - r' if r' # 0, else
+     q = -q'; then for a negative B, the same with -B: q = -q - 1 and
+     r = r + B if r # 0, else q = -q, the quotient rounded down and the
+     remainder of B's sign. (The division inline was unsigned: -360 DIV
+     20 gave 3258.) *)
   PROCEDURE emitI_DIV;
     VAR loop, p1, p2, p3: LONGINT;
   BEGIN
     OCG.SetLongA(TRUE); OCG.SetLongI(TRUE);
     fpSubAddr[I_DIV] := OCG.Here();
+    OCG.gen1(OCG.STZ * 32 + OCG.mDP, FP_TEMP);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_B_LO);
+    p1 := emitFwdBranch(OCG.BPL);
+    OCG.gen1(OCG.EOR * 32 + OCG.mImm, 0FFFFH); OCG.gen1(OCG.INC * 32 + OCG.mAcc, 0);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_B_LO);
+    OCG.gen1(OCG.DEC * 32 + OCG.mDP, FP_TEMP);
+    patch(p1);
     OCG.gen1(OCG.STZ * 32 + OCG.mDP, FP_SIGN);
     OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_A_LO);
     p1 := emitFwdBranch(OCG.BPL);
@@ -1126,6 +1221,22 @@ MODULE ORGFP; (* 65C816 floating-point subroutine library — companion to ORG.
     OCG.gen1(OCG.EOR * 32 + OCG.mImm, 0FFFFH); OCG.Clc; OCG.gen1(OCG.ADC * 32 + OCG.mImm, 1);
     OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_A_LO);
     patch(p3); patch(p1);
+    OCG.gen1(OCG.BIT * 32 + OCG.mDP, FP_TEMP);
+    p1 := emitFwdBranch(OCG.BPL);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_M1_LO);
+    p2 := emitFwdBranch(OCG.BEQ);
+    OCG.Sec;
+    OCG.gen1(OCG.SBC * 32 + OCG.mDP, FP_B_LO);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_M1_LO);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_A_LO);
+    OCG.gen1(OCG.EOR * 32 + OCG.mImm, 0FFFFH);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_A_LO);
+    p3 := emitFwdBranch(OCG.BRA);
+    patch(p2);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_A_LO);
+    OCG.gen1(OCG.EOR * 32 + OCG.mImm, 0FFFFH); OCG.gen1(OCG.INC * 32 + OCG.mAcc, 0);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_A_LO);
+    patch(p3); patch(p1);
     OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_M1_LO);
     OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_B_LO);
     OCG.Rts
@@ -1141,7 +1252,8 @@ MODULE ORGFP; (* 65C816 floating-point subroutine library — companion to ORG.
     IF fpFixupCount[FP_CMP] > 0 THEN emitFP_CMP END;
     IF fpFixupCount[L_MUL] > 0 THEN emitL_MUL END;
     IF fpFixupCount[L_DIV] > 0 THEN emitL_DIV END;
-    IF fpFixupCount[I_DIV] > 0 THEN emitI_DIV END
+    IF fpFixupCount[I_DIV] > 0 THEN emitI_DIV END;
+    IF fpFixupCount[L_FLT] > 0 THEN emitL_FLT END
   END EmitSubroutines;
 
   PROCEDURE FixupCalls*;

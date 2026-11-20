@@ -273,7 +273,10 @@ MODULE ORGE FRIENDS ORG; (* 65C816 code generator, its expressions: type
       ORGI.Set16(TRUE, TRUE);
       OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(x.r));
       OCG.gen1(OCG.ORA * 32 + OCG.mDP, ORGI.RegAddr(x.r + 1));
-      nilSkip := ORGI.emitFwdBranch(OCG.BEQ);
+      (* NIL passes a guard, and is of no type in a test *)
+      IF isguard THEN nilSkip := ORGI.emitFwdBranch(OCG.BEQ)
+      ELSE nilSkip := ORGI.chain(ORGI.EQ, ORB.intType, 0)
+      END;
       ORGI.incR; ORGI.incR;
       OCG.Sec;
       OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(x.r));
@@ -314,10 +317,10 @@ MODULE ORGE FRIENDS ORG; (* 65C816 code generator, its expressions: type
       OCG.gen1(OCG.EOR * 32 + OCG.mDP, ORGI.RegAddr(ORGI.RH - 1));
       OCG.gen1(OCG.ORA * 32 + OCG.mDP, ORGI.RegAddr(ORGI.RH - 2));
       ORGI.RH := ORGI.RH - 2;
-      ORGI.patch(nilSkip);
       IF isguard THEN
+        ORGI.patch(nilSkip);
         IF ORGI.check THEN ORGI.Trap(ORGI.EQ, 2) END
-      ELSE x.origType := ORB.intType; ORGI.SetCC(x, ORGI.EQ); ORGI.RH := ORGI.RH - 2
+      ELSE x.origType := ORB.intType; ORGI.SetCC(x, ORGI.EQ); x.a := nilSkip; ORGI.RH := ORGI.RH - 2
       END
     END
   END TypeTest;
@@ -683,9 +686,10 @@ MODULE ORGE FRIENDS ORG; (* 65C816 code generator, its expressions: type
   END genDivLoop;
 
   (* x DIV (MOD if rem) the divisor, in register yr or the constant c
-     (yr < 0), into x's register xr: as Oberon defines them for a divisor
-     > 0, the quotient rounded down and the remainder never negative
-     (genDivLoop alone is unsigned: -360 DIV 20 gave 3258). By ORGFP's
+     (yr < 0), into x's register xr: as Oberon defines them, the quotient
+     rounded down and the remainder of the divisor's sign, never negative
+     for a divisor > 0 (genDivLoop alone is unsigned: -360 DIV 20 gave
+     3258). By ORGFP's
      I_DIV, shared by the module; inline, with the signs worked the same
      way, if its fixups are full. With the extension, DIV, which rounds
      down: the quotient in A, the remainder in X. *)
@@ -704,10 +708,17 @@ MODULE ORGE FRIENDS ORG; (* 65C816 code generator, its expressions: type
       ORGFP.AddFixup(ORGFP.I_DIV); OCG.gen1(OCG.JSR * 32 + OCG.mAbs, 0);
       IF rem THEN OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGFP.FP_B_LO) ELSE OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGFP.FP_A_LO) END;
       OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(xr))
-    ELSE n := 0;
+    ELSE n := 0; OCG.gen1(OCG.STZ * 32 + OCG.mDP, ORGFP.FP_TEMP);
       IF yr < 0 THEN
         OCG.gen1(OCG.LDA * 32 + OCG.mImm, c); OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(ORGI.RH));
         yr := ORGI.RH; ORGI.incR; INC(n)
+      ELSE   (* a negative divisor: by -y, the signs worked after *)
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(yr));
+        p1 := ORGI.emitFwdBranch(OCG.BPL);
+        OCG.gen1(OCG.EOR * 32 + OCG.mImm, 0FFFFH); OCG.gen1(OCG.INC * 32 + OCG.mAcc, 0);
+        OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(yr));
+        OCG.gen1(OCG.DEC * 32 + OCG.mDP, ORGFP.FP_TEMP);
+        ORGI.patch(p1)
       END;
       q := ORGI.RH; ORGI.incR; INC(n);
       OCG.gen1(OCG.STZ * 32 + OCG.mDP, ORGFP.FP_SIGN);
@@ -733,6 +744,22 @@ MODULE ORGE FRIENDS ORG; (* 65C816 code generator, its expressions: type
       ORGI.patch(p2);
       OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(q));
       OCG.gen1(OCG.EOR * 32 + OCG.mImm, 0FFFFH); OCG.Clc; OCG.gen1(OCG.ADC * 32 + OCG.mImm, 1);
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(q));
+      ORGI.patch(p3); ORGI.patch(p1);
+      OCG.gen1(OCG.BIT * 32 + OCG.mDP, ORGFP.FP_TEMP);
+      p1 := ORGI.emitFwdBranch(OCG.BPL);
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(xr));
+      p2 := ORGI.emitFwdBranch(OCG.BEQ);
+      OCG.Sec;
+      OCG.gen1(OCG.SBC * 32 + OCG.mDP, ORGI.RegAddr(yr));
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(xr));
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(q));
+      OCG.gen1(OCG.EOR * 32 + OCG.mImm, 0FFFFH);
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(q));
+      p3 := ORGI.emitFwdBranch(OCG.BRA);
+      ORGI.patch(p2);
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(q));
+      OCG.gen1(OCG.EOR * 32 + OCG.mImm, 0FFFFH); OCG.gen1(OCG.INC * 32 + OCG.mAcc, 0);
       OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(q));
       ORGI.patch(p3); ORGI.patch(p1);
       IF ~rem THEN OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(q)); OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(xr)) END;
@@ -785,8 +812,8 @@ MODULE ORGE FRIENDS ORG; (* 65C816 code generator, its expressions: type
         END
       ELSE
         loadOperands(x, y);
-        IF ORGI.check THEN   (* the divisor's flags: it was not the last loaded if it was in a register *)
-          ORGI.Set16(TRUE, TRUE); OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(y.r)); ORGI.Trap(ORGI.LE, 6)
+        IF ORGI.check THEN   (* a divisor 0 traps; its flags: it was not the last loaded if it was in a register *)
+          ORGI.Set16(TRUE, TRUE); OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(y.r)); ORGI.Trap(ORGI.NE, 6)
         END;
         intDiv(x.r, y.r, 0, FALSE);
         (* the quotient into the lower of x's and y's registers, those above
@@ -832,8 +859,8 @@ MODULE ORGE FRIENDS ORG; (* 65C816 code generator, its expressions: type
         END
       ELSE
         loadOperands(x, y);
-        IF ORGI.check THEN   (* the divisor's flags: it was not the last loaded if it was in a register *)
-          ORGI.Set16(TRUE, TRUE); OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(y.r)); ORGI.Trap(ORGI.LE, 6)
+        IF ORGI.check THEN   (* a divisor 0 traps; its flags: it was not the last loaded if it was in a register *)
+          ORGI.Set16(TRUE, TRUE); OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(y.r)); ORGI.Trap(ORGI.NE, 6)
         END;
         intDiv(x.r, y.r, 0, TRUE);
         (* the remainder, in x's register, into the lower of x's and y's *)
@@ -1035,7 +1062,7 @@ MODULE ORGE FRIENDS ORG; (* 65C816 code generator, its expressions: type
     useSigned := ~isPointer & ~use8 & (x.type.form = ORB.Int);
     IF isPointer THEN
       ORGI.Set16(TRUE, TRUE);
-      IF (y.mode = ORB.Const) & (y.a = 0) THEN
+      IF (y.mode = ORB.Const) & (y.a = 0) & (y.type.form # ORB.Proc) THEN   (* NIL, not a procedure at 0 *)
         ORGI.load(x);
         OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(x.r));
         OCG.gen1(OCG.ORA * 32 + OCG.mDP, ORGI.RegAddr(x.r + 1));
@@ -1162,28 +1189,72 @@ MODULE ORGE FRIENDS ORG; (* 65C816 code generator, its expressions: type
     END
   END strAdr;
 
-  (* Compare two 0X-terminated strings character by character. The loop
-     ends at the first difference or at the common terminator, leaving
-     Z = (x = y) and C = (x >= y) from the 8-bit CMP of that character —
-     the flags emitBranch tests for an unsigned operand. REP changes
-     neither. *)
-  PROCEDURE StringRelation*(op: INTEGER; VAR x, y: ORGI.Item);
-    VAR loopTop: LONGINT;
+  (* An array's length, which ends its string if it holds no 0X: k 0 for
+     a string constant (its 0X ends it), 1 for a fixed array (v the
+     length), 2 for an open array parameter (v its length's offset). *)
+  PROCEDURE strLim(VAR x: ORGI.Item; VAR k, v: LONGINT);
+  BEGIN k := 0;
+    IF x.type.form = ORB.Array THEN
+      IF x.type.len >= 0 THEN k := 1; v := x.type.len
+      ELSIF x.mode = ORB.Par THEN k := 2; v := x.a + 4
+      END
+    END
+  END strLim;
+
+  (* the character of a string at Y into A (cmp: compared with A), 0X
+     beyond its length v (strLim's k) *)
+  PROCEDURE strChar(op, r, k, v: LONGINT);
+    VAR p, q: LONGINT;
   BEGIN
+    IF k # 0 THEN
+      IF k = 1 THEN OCG.gen1(OCG.CPY * 32 + OCG.mImm, v) ELSE OCG.gen1(OCG.CPY * 32 + OCG.mDP, v) END;
+      p := ORGI.emitFwdBranch(OCG.BCC);
+      OCG.gen1(op * 32 + OCG.mImm, 0);
+      q := ORGI.emitFwdBranch(OCG.BRA);
+      ORGI.patch(p);
+      OCG.gen1(op * 32 + OCG.mDPIndLY, ORGI.RegAddr(r));
+      ORGI.patch(q)
+    ELSE OCG.gen1(op * 32 + OCG.mDPIndLY, ORGI.RegAddr(r))
+    END
+  END strChar;
+
+  (* Compare two strings character by character, each ending at its 0X
+     or at its array's length. The loop ends at the first difference or
+     at the common end, leaving Z = (x = y) and C = (x >= y) from the
+     8-bit CMP of that character (of Y with the length, when both are
+     arrays of one length) — the flags emitBranch tests for an unsigned
+     operand. REP changes neither. *)
+  PROCEDURE StringRelation*(op: INTEGER; VAR x, y: ORGI.Item);
+    VAR loopTop, kx, vx, ky, vy, n, p, p1, p2: LONGINT;
+  BEGIN
+    strLim(x, kx, vx); strLim(y, ky, vy);
     strAdr(x); strAdr(y);
-    ORGI.Set16(TRUE, TRUE);
+    ORGI.Set16(TRUE, TRUE); n := 0;
+    IF kx = 2 THEN
+      OCG.gen1(OCG.LDA * 32 + OCG.mSR, vx + ORGI.frame); OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(ORGI.RH));
+      vx := ORGI.RegAddr(ORGI.RH); ORGI.incR; INC(n)
+    END;
+    IF ky = 2 THEN
+      OCG.gen1(OCG.LDA * 32 + OCG.mSR, vy + ORGI.frame); OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(ORGI.RH));
+      vy := ORGI.RegAddr(ORGI.RH); ORGI.incR; INC(n)
+    END;
     OCG.gen1(OCG.LDY * 32 + OCG.mImm, 0);
     ORGI.Set8(TRUE, FALSE);
-    loopTop := OCG.Here();
-    OCG.gen1(OCG.LDA * 32 + OCG.mDPIndLY, ORGI.RegAddr(x.r));
-    OCG.gen1(OCG.CMP * 32 + OCG.mDPIndLY, ORGI.RegAddr(y.r));
-    OCG.gen1(OCG.BNE * 32 + OCG.mPCR, OCG.Here() + 2 + 7);   (* differ *)
+    loopTop := OCG.Here(); p := 0;
+    IF (kx = 1) & (ky = 1) & (vx = vy) THEN   (* both ended at the length: equal *)
+      OCG.gen1(OCG.CPY * 32 + OCG.mImm, vx); p := ORGI.emitFwdBranch(OCG.BEQ); kx := 0; ky := 0
+    END;
+    strChar(OCG.LDA, x.r, kx, vx);
+    strChar(OCG.CMP, y.r, ky, vy);
+    p1 := ORGI.emitFwdBranch(OCG.BNE);   (* differ *)
     OCG.gen1(OCG.CMP * 32 + OCG.mImm, 0);
-    OCG.gen1(OCG.BEQ * 32 + OCG.mPCR, OCG.Here() + 2 + 3);   (* both ended *)
+    p2 := ORGI.emitFwdBranch(OCG.BEQ);   (* both ended *)
     OCG.Iny;
     OCG.gen1(OCG.BRA * 32 + OCG.mPCR, loopTop);
+    IF p # 0 THEN ORGI.patch(p) END;
+    ORGI.patch(p1); ORGI.patch(p2);
     ORGI.Set16(TRUE, FALSE);
-    ORGI.RH := ORGI.RH - 4;
+    ORGI.RH := ORGI.RH - 4 - n;
     ORGI.SetCC(x, relmap[op - ORS.eql])
   END StringRelation;
 
