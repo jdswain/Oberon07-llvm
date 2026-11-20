@@ -29,6 +29,7 @@ extern void    ORP__Compile(const char *name, INTEGER len, BOOLEAN force);
 extern INTEGER ORS__errcnt;
 extern void    ORB__AddSearchPath(const char *path, INTEGER len);
 extern BOOLEAN ORG__mapOn;
+extern BOOLEAN OCG__xops;
 
 /* Register a .smb search path. ORP__init must have run first (the ORB
  * module body zeroes the search-path table), so force the run-once init
@@ -39,15 +40,17 @@ static void AddSearchPath(const char *path) {
 }
 
 static void usage(const char *argv0) {
-    printf("Usage: %s <module.Mod> [-s] [-I<dir>] [-I <dir>]\n", argv0);
+    printf("Usage: %s <module.Mod> [-s] [-m] [-x] [-I<dir>] [-I <dir>]\n", argv0);
     printf("  -s          Force new symbol file\n");
     printf("  -m          Write <module>.map: each procedure's code offset and name\n");
+    printf("  -x          Code for the core with its extension after WDM (MUL, DIV,\n");
+    printf("              the shifts by n: Verilog65C816's docs/65C832.md)\n");
     printf("  -I<dir>     Add symbol-file (.smb) search path\n");
 }
 
 int main(int argc, char **argv) {
     const char *filename = NULL;
-    BOOLEAN force = FALSE, map = FALSE;
+    BOOLEAN force = FALSE, map = FALSE, xops = FALSE;
     int i;
 
     if (argc < 2) { usage(argv[0]); return 1; }
@@ -58,6 +61,8 @@ int main(int argc, char **argv) {
             force = TRUE;
         } else if (strcmp(argv[i], "-m") == 0) {
             map = TRUE;
+        } else if (strcmp(argv[i], "-x") == 0) {
+            xops = TRUE;
         } else if (strncmp(argv[i], "-I", 2) == 0) {
             if (argv[i][2] != '\0') {
                 AddSearchPath(&argv[i][2]);
@@ -75,6 +80,7 @@ int main(int argc, char **argv) {
 
     ORP__init();   /* runs the Oberon module init chain */
     if (map) ORG__mapOn = TRUE;
+    if (xops) OCG__xops = TRUE;
     ORP__Compile(filename, (INTEGER)strlen(filename) + 1, force);
 
     if (ORS__errcnt > 0) {

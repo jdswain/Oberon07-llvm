@@ -36,6 +36,22 @@ cd s816 && make      # -> oc816    (65C816 backend; pure Oberon, no libLLVM)
 | Memory management | ARC | GC (mark/sweep, later stage) |
 | Output | `.ll` / `.o` | self-contained relocatable `.816` |
 
+`oc816 Module.Mod [-s] [-m] [-x] [-I dir]`: `-s` allows a new symbol
+file, `-m` writes `Module.map` (each procedure's code offset), and `-x`
+makes code for Verilog65C816's core with its extension after WDM
+(its `docs/65C832.md`; `OCG.xops`):
+
+- an INTEGER `*` by UML;
+- `DIV` and `MOD` by DIV, which rounds down as Oberon's do;
+- a LONGINT `*` by three UMLs;
+- a LONGINT `DIV` and `MOD` by one DIV when both are 16-bit numbers, else
+  by UDV in parts, a divisor of 10000H or more still a bit a step;
+- a multiply, `DIV` or shift by a constant power of 2 by ASL, LSR or ASR
+  #n, and an index by its element's size by ASL #n or UML.
+
+That code runs only on such a core (em16 -fpga). Without `-x` the code is
+as it was, byte for byte. OS16 is compiled with `-x`.
+
 The 816 loads every module into one bank; dynamic-dispatch vtables and
 interface itables use loader-filled absolute in-bank addresses. Type
 descriptors are generated deferred (offsets assigned in `ORG.FinalizeTDs`,
@@ -48,8 +64,9 @@ interfaces read real offsets).
   module with each and `diff` the `.ll`.
 - **816:** `cd ../../65/65Tools/oc && make test_self` runs the em16 golden
   suite (all levels + L16 OO + L17 interfaces). Override the compiler with
-  `OC=/path/to/oc816`. The C compiler in that repo stays as a reference
-  cross-check; see its `CLAUDE.md`.
+  `OC=/path/to/oc816`, and with `OCFLAGS=-x` for the extension's code
+  (L18_ArithSums checks its arithmetic). The C compiler in that repo
+  stays as a reference cross-check; see its `CLAUDE.md`.
 
 Design records live in `../doc/DDR-*.md` (interfaces: DDR-008; the ABI
 resolution for both backends is DDR-008 §6).

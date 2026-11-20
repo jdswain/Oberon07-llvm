@@ -821,57 +821,168 @@ MODULE ORGFP; (* 65C816 floating-point subroutine library — companion to ORG.
     OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_A_HI)
   END negA;
 
+  (* L_MUL by the extension's UML: the low words' product, and to its high
+     word the low words of A's low by B's high and A's high by B's low *)
+  PROCEDURE xmulL;
+  BEGIN
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_A_LO);
+    OCG.X(OCG.xUML * 32 + OCG.mDP, FP_B_HI);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_TEMP);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_A_HI);
+    OCG.X(OCG.xUML * 32 + OCG.mDP, FP_B_LO);
+    OCG.Clc;
+    OCG.gen1(OCG.ADC * 32 + OCG.mDP, FP_TEMP);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_TEMP);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_A_LO);
+    OCG.X(OCG.xUML * 32 + OCG.mDP, FP_B_LO);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_A_LO);
+    OCG.Txa;
+    OCG.Clc;
+    OCG.gen1(OCG.ADC * 32 + OCG.mDP, FP_TEMP);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_A_HI);
+    OCG.Rts
+  END xmulL;
+
   (* A := A * B, the low 32 bits, which are the same signed or unsigned.
-     Shift and add; the loop ends when no bits of A are left. *)
+     Shift and add; the loop ends when no bits of A are left. With the
+     extension, xmulL. *)
   PROCEDURE emitL_MUL;
     VAR loop, p1, p2: LONGINT;
   BEGIN
     OCG.SetLongA(TRUE); OCG.SetLongI(TRUE);
     fpSubAddr[L_MUL] := OCG.Here();
-    OCG.gen1(OCG.STZ * 32 + OCG.mDP, FP_PROD0);
-    OCG.gen1(OCG.STZ * 32 + OCG.mDP, FP_PROD1);
-    loop := OCG.Here();
-    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_A_LO);
-    OCG.gen1(OCG.ORA * 32 + OCG.mDP, FP_A_HI);
-    p1 := emitFwdBranch(OCG.BEQ);
-    OCG.gen1(OCG.LSR * 32 + OCG.mDP, FP_A_HI);
-    OCG.gen1(OCG.ROR * 32 + OCG.mDP, FP_A_LO);
-    p2 := emitFwdBranch(OCG.BCC);
-    OCG.Clc;
-    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_PROD0);
-    OCG.gen1(OCG.ADC * 32 + OCG.mDP, FP_B_LO);
-    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_PROD0);
-    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_PROD1);
-    OCG.gen1(OCG.ADC * 32 + OCG.mDP, FP_B_HI);
-    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_PROD1);
-    patch(p2);
-    OCG.gen1(OCG.ASL * 32 + OCG.mDP, FP_B_LO);
-    OCG.gen1(OCG.ROL * 32 + OCG.mDP, FP_B_HI);
-    OCG.gen1(OCG.BRA * 32 + OCG.mPCR, loop);
-    patch(p1);
-    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_PROD0);
-    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_A_LO);
-    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_PROD1);
-    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_A_HI);
-    OCG.Rts
+    IF OCG.xops THEN xmulL
+    ELSE
+      OCG.gen1(OCG.STZ * 32 + OCG.mDP, FP_PROD0);
+      OCG.gen1(OCG.STZ * 32 + OCG.mDP, FP_PROD1);
+      loop := OCG.Here();
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_A_LO);
+      OCG.gen1(OCG.ORA * 32 + OCG.mDP, FP_A_HI);
+      p1 := emitFwdBranch(OCG.BEQ);
+      OCG.gen1(OCG.LSR * 32 + OCG.mDP, FP_A_HI);
+      OCG.gen1(OCG.ROR * 32 + OCG.mDP, FP_A_LO);
+      p2 := emitFwdBranch(OCG.BCC);
+      OCG.Clc;
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_PROD0);
+      OCG.gen1(OCG.ADC * 32 + OCG.mDP, FP_B_LO);
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_PROD0);
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_PROD1);
+      OCG.gen1(OCG.ADC * 32 + OCG.mDP, FP_B_HI);
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_PROD1);
+      patch(p2);
+      OCG.gen1(OCG.ASL * 32 + OCG.mDP, FP_B_LO);
+      OCG.gen1(OCG.ROL * 32 + OCG.mDP, FP_B_HI);
+      OCG.gen1(OCG.BRA * 32 + OCG.mPCR, loop);
+      patch(p1);
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_PROD0);
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_A_LO);
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_PROD1);
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_A_HI);
+      OCG.Rts
+    END
   END emitL_MUL;
+
+  (* L_DIV's start with the extension: A and B both 16-bit numbers (B
+     positive), a DIV, which rounds down as Oberon does; else on to the rest *)
+  PROCEDURE xdivSmall;
+    VAR p1, p2, p3: LONGINT;
+  BEGIN
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_B_HI);
+    p1 := emitFwdBranch(OCG.BNE);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_B_LO);
+    p2 := emitFwdBranch(OCG.BMI);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_A_LO);
+    OCG.ShiftA(OCG.ASR, 15);                     (* A's low word's sign: its high if 16-bit *)
+    OCG.gen1(OCG.CMP * 32 + OCG.mDP, FP_A_HI);
+    p3 := emitFwdBranch(OCG.BNE);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_A_LO);
+    OCG.X(OCG.xDIV * 32 + OCG.mDP, FP_B_LO);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_A_LO);
+    OCG.ShiftA(OCG.ASR, 15);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_A_HI);
+    OCG.gen1(OCG.STX * 32 + OCG.mDP, FP_B_LO);
+    OCG.Rts;
+    patch(p1); patch(p2); patch(p3)
+  END xdivSmall;
+
+  (* L_DIV's |A| DIV B with the extension, for B < 10000H: the high word's
+     quotient by UDV, then the low word's, the high's remainder r before it
+     (r < B), a byte at a time by UDV if B < 100H (r * 100H and a byte are
+     less than 10000H), else a bit a step; the quotient in FP_A, the
+     remainder in FP_M1, and a branch to the end (fa, fb). For B >= 10000H
+     it goes on (pb) to the loop of 32 steps. *)
+  PROCEDURE xdivParts(VAR pb, fa, fb: LONGINT);
+    VAR pm, ps, pk, loop: LONGINT;
+  BEGIN
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_B_HI);
+    pb := emitFwdBranch(OCG.BNE);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_A_HI);
+    OCG.X(OCG.xUDV * 32 + OCG.mDP, FP_B_LO);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_A_HI);   (* X: r *)
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_B_LO);
+    OCG.gen1(OCG.CMP * 32 + OCG.mImm, 100H);
+    pm := emitFwdBranch(OCG.BCS);
+    OCG.Txa; OCG.Xba;                            (* r * 100H and the low word's high byte *)
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_TEMP);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_A_LO);
+    OCG.Xba;
+    OCG.gen1(OCG.AND * 32 + OCG.mImm, 0FFH);
+    OCG.gen1(OCG.ORA * 32 + OCG.mDP, FP_TEMP);
+    OCG.X(OCG.xUDV * 32 + OCG.mDP, FP_B_LO);
+    OCG.Xba;                                     (* the quotient's high byte *)
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_TEMP2);
+    OCG.Txa; OCG.Xba;                            (* its remainder * 100H and the low byte *)
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_TEMP);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_A_LO);
+    OCG.gen1(OCG.AND * 32 + OCG.mImm, 0FFH);
+    OCG.gen1(OCG.ORA * 32 + OCG.mDP, FP_TEMP);
+    OCG.X(OCG.xUDV * 32 + OCG.mDP, FP_B_LO);
+    OCG.gen1(OCG.ORA * 32 + OCG.mDP, FP_TEMP2);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_A_LO);
+    OCG.gen1(OCG.STX * 32 + OCG.mDP, FP_M1_LO);
+    OCG.gen1(OCG.STZ * 32 + OCG.mDP, FP_M1_HI);
+    fa := emitFwdBranch(OCG.BRA);
+    patch(pm);                                   (* 100H <= B < 10000H: 16 steps *)
+    OCG.gen1(OCG.STX * 32 + OCG.mDP, FP_M1_LO);
+    OCG.gen1(OCG.LDX * 32 + OCG.mImm, 16);
+    loop := OCG.Here();
+    OCG.gen1(OCG.ASL * 32 + OCG.mDP, FP_A_LO);
+    OCG.gen1(OCG.ROL * 32 + OCG.mDP, FP_M1_LO);
+    ps := emitFwdBranch(OCG.BCS);                (* 17 bits: more than B *)
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_M1_LO);
+    OCG.gen1(OCG.CMP * 32 + OCG.mDP, FP_B_LO);
+    pk := emitFwdBranch(OCG.BCC);
+    patch(ps);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_M1_LO);  (* C is 1 *)
+    OCG.gen1(OCG.SBC * 32 + OCG.mDP, FP_B_LO);
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, FP_M1_LO);
+    OCG.gen1(OCG.INC * 32 + OCG.mDP, FP_A_LO);
+    patch(pk);
+    OCG.Dex;
+    OCG.gen1(OCG.BNE * 32 + OCG.mPCR, loop);
+    OCG.gen1(OCG.STZ * 32 + OCG.mDP, FP_M1_HI);
+    fb := emitFwdBranch(OCG.BRA)
+  END xdivParts;
 
   (* A := A DIV B, B := A MOD B for B > 0, as Oberon defines them: the
      quotient is rounded down and the remainder is never negative.
      Restoring division of |A|, 32 steps, the remainder in FP_M1; for a
      negative A the results are then q = -q' - 1, r = B - r' if r' # 0,
-     and q = -q' otherwise. *)
+     and q = -q' otherwise. With the extension, xdivSmall and xdivParts
+     first. *)
   PROCEDURE emitL_DIV;
-    VAR loop, p1, p2, p3: LONGINT;
+    VAR loop, p1, p2, p3, pb, fa, fb: LONGINT;
   BEGIN
     OCG.SetLongA(TRUE); OCG.SetLongI(TRUE);
     fpSubAddr[L_DIV] := OCG.Here();
+    IF OCG.xops THEN xdivSmall END;
     OCG.gen1(OCG.STZ * 32 + OCG.mDP, FP_SIGN);
     OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_A_HI);
     p1 := emitFwdBranch(OCG.BPL);
     negA;
     OCG.gen1(OCG.DEC * 32 + OCG.mDP, FP_SIGN);
     patch(p1);
+    IF OCG.xops THEN xdivParts(pb, fa, fb); patch(pb) END;
     OCG.gen1(OCG.STZ * 32 + OCG.mDP, FP_M1_LO);
     OCG.gen1(OCG.STZ * 32 + OCG.mDP, FP_M1_HI);
     OCG.gen1(OCG.LDX * 32 + OCG.mImm, 32);
@@ -894,6 +1005,7 @@ MODULE ORGFP; (* 65C816 floating-point subroutine library — companion to ORG.
     patch(p1);
     OCG.Dex;
     OCG.gen1(OCG.BNE * 32 + OCG.mPCR, loop);
+    IF OCG.xops THEN patch(fa); patch(fb) END;
     OCG.gen1(OCG.BIT * 32 + OCG.mDP, FP_SIGN);
     p1 := emitFwdBranch(OCG.BPL);
     OCG.gen1(OCG.LDA * 32 + OCG.mDP, FP_M1_LO);

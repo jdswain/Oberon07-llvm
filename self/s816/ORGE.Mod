@@ -475,28 +475,55 @@ MODULE ORGE FRIENDS ORG; (* 65C816 code generator, its expressions: type
     RETURN m
   END log2;
 
-  (* general shift-and-add multiply loop; result left in A *)
+  (* general shift-and-add multiply loop; result left in A. With the
+     extension, UML: the product's low word in A, its high in X *)
   PROCEDURE mulLoop(xr, yr: LONGINT);
   BEGIN
     ORGI.Set16(TRUE, TRUE);
-    OCG.gen1(OCG.LDA * 32 + OCG.mImm, 0);
-    OCG.gen1(OCG.LDX * 32 + OCG.mDP, ORGI.RegAddr(xr));
-    OCG.gen1(OCG.BEQ * 32 + OCG.mPCR, OCG.Here() + 2 + 11);
-    OCG.gen1(OCG.LSR * 32 + OCG.mDP, ORGI.RegAddr(xr));
-    OCG.gen1(OCG.BCC * 32 + OCG.mPCR, OCG.Here() + 2 + 3);
-    OCG.Clc;
-    OCG.gen1(OCG.ADC * 32 + OCG.mDP, ORGI.RegAddr(yr));
-    OCG.gen1(OCG.ASL * 32 + OCG.mDP, ORGI.RegAddr(yr));
-    OCG.gen1(OCG.BRA * 32 + OCG.mPCR, OCG.Here() + 2 - 15)
+    IF OCG.xops THEN
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(xr));
+      OCG.X(OCG.xUML * 32 + OCG.mDP, ORGI.RegAddr(yr))
+    ELSE
+      OCG.gen1(OCG.LDA * 32 + OCG.mImm, 0);
+      OCG.gen1(OCG.LDX * 32 + OCG.mDP, ORGI.RegAddr(xr));
+      OCG.gen1(OCG.BEQ * 32 + OCG.mPCR, OCG.Here() + 2 + 11);
+      OCG.gen1(OCG.LSR * 32 + OCG.mDP, ORGI.RegAddr(xr));
+      OCG.gen1(OCG.BCC * 32 + OCG.mPCR, OCG.Here() + 2 + 3);
+      OCG.Clc;
+      OCG.gen1(OCG.ADC * 32 + OCG.mDP, ORGI.RegAddr(yr));
+      OCG.gen1(OCG.ASL * 32 + OCG.mDP, ORGI.RegAddr(yr));
+      OCG.gen1(OCG.BRA * 32 + OCG.mPCR, OCG.Here() + 2 - 15)
+    END
   END mulLoop;
 
   (* 32-bit arithmetic shift right of two-word reg r by e bits, in place
-     (signed DIV by 2^e). The sign bit is replicated via CMP #8000H. *)
+     (signed DIV by 2^e). The sign bit is replicated via CMP #8000H; with
+     the extension, each word by LSR, ASL and ASR #n. *)
   PROCEDURE longAsr(r, e: LONGINT);
     VAR i: LONGINT;
   BEGIN
     ORGI.Set16(TRUE, TRUE); i := 0;
-    IF e >= 16 THEN   (* a word at once: the high into the low, the sign into the high *)
+    IF OCG.xops & (e >= 16) THEN   (* the high, shifted, into the low; its sign into the high *)
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r + 1));
+      IF e > 16 THEN OCG.ShiftA(OCG.ASR, e - 16) END;
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(r));
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r + 1));
+      OCG.ShiftA(OCG.ASR, 15);
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(r + 1));
+      i := e
+    ELSIF OCG.xops & (e >= 2) THEN   (* the low: its bits and the high's low e; the high *)
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r));
+      OCG.ShiftA(OCG.LSR, e);
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(r));
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r + 1));
+      OCG.ShiftA(OCG.ASL, 16 - e);
+      OCG.gen1(OCG.ORA * 32 + OCG.mDP, ORGI.RegAddr(r));
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(r));
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r + 1));
+      OCG.ShiftA(OCG.ASR, e);
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(r + 1));
+      i := e
+    ELSIF e >= 16 THEN   (* a word at once: the high into the low, the sign into the high *)
       OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r + 1));
       OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(r));
       OCG.gen1(OCG.LDA * 32 + OCG.mImm, 0);
@@ -525,12 +552,31 @@ MODULE ORGE FRIENDS ORG; (* 65C816 code generator, its expressions: type
     END
   END longAsr;
 
-  (* 32-bit shift left of two-word reg r by e bits, in place (MUL by 2^e). *)
+  (* 32-bit shift left of two-word reg r by e bits, in place (MUL by 2^e);
+     with the extension, each word by ASL and LSR #n. *)
   PROCEDURE longAsl(r, e: LONGINT);
     VAR i: LONGINT;
   BEGIN
     ORGI.Set16(TRUE, TRUE); i := 0;
-    IF e >= 16 THEN   (* a word at once: the low into the high, 0 into the low *)
+    IF OCG.xops & (e >= 16) THEN   (* the low, shifted, into the high; 0 into the low *)
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r));
+      IF e > 16 THEN OCG.ShiftA(OCG.ASL, e - 16) END;
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(r + 1));
+      OCG.gen1(OCG.STZ * 32 + OCG.mDP, ORGI.RegAddr(r));
+      i := e
+    ELSIF OCG.xops & (e >= 3) THEN   (* the high: its bits and the low's high e; the low *)
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r + 1));
+      OCG.ShiftA(OCG.ASL, e);
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(r + 1));
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r));
+      OCG.ShiftA(OCG.LSR, 16 - e);
+      OCG.gen1(OCG.ORA * 32 + OCG.mDP, ORGI.RegAddr(r + 1));
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(r + 1));
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r));
+      OCG.ShiftA(OCG.ASL, e);
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(r));
+      i := e
+    ELSIF e >= 16 THEN   (* a word at once: the low into the high, 0 into the low *)
       OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r));
       OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(r + 1));
       OCG.gen1(OCG.STZ * 32 + OCG.mDP, ORGI.RegAddr(r));
@@ -551,37 +597,54 @@ MODULE ORGE FRIENDS ORG; (* 65C816 code generator, its expressions: type
     END
   END longAsl;
 
+  (* register r := r * 2^e, an INTEGER's: e ASLs of it counted by X, or
+     with the extension one ASL of it (e = 1) or LDA, ASL #e and STA *)
+  PROCEDURE shlReg(r, e: LONGINT);
+    VAR loopTop: LONGINT;
+  BEGIN ORGI.Set16(TRUE, TRUE);
+    IF OCG.xops & (e = 1) THEN OCG.gen1(OCG.ASL * 32 + OCG.mDP, ORGI.RegAddr(r))
+    ELSIF OCG.xops & (e < 16) THEN
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r));
+      OCG.ShiftA(OCG.ASL, e);
+      OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(r))
+    ELSE
+      OCG.gen1(OCG.LDX * 32 + OCG.mImm, e);
+      loopTop := OCG.Here();
+      OCG.gen1(OCG.ASL * 32 + OCG.mDP, ORGI.RegAddr(r));
+      OCG.Dex;
+      OCG.gen1(OCG.BNE * 32 + OCG.mPCR, loopTop)
+    END
+  END shlReg;
+
+  (* register r := r * c, an INTEGER's, by the extension's UML # *)
+  PROCEDURE umlReg(r, c: LONGINT);
+  BEGIN ORGI.Set16(TRUE, TRUE);
+    OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(r));
+    OCG.X(OCG.xUML * 32 + OCG.mImm, ORGI.Lo16(c));
+    OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(r))
+  END umlReg;
+
   PROCEDURE MulOp*(VAR x, y: ORGI.Item);
-    VAR e, loopTop: LONGINT;
+    VAR e: LONGINT;
   BEGIN
     ORGI.promoteConst(x, y); ORGI.widenToConst(x, y);
     IF (x.mode = ORB.Const) & (y.mode = ORB.Const) THEN x.a := x.a * y.a
     ELSIF (y.mode = ORB.Const) & (y.a >= 2) & (log2(y.a, e) = 1) THEN
       IF ORGI.IsLong(x.type) THEN ORGI.load(x); longAsl(x.r, e)
-      ELSE
-        ORGI.load(x); ORGI.Set16(TRUE, TRUE);
-        OCG.gen1(OCG.LDX * 32 + OCG.mImm, e);
-        loopTop := OCG.Here();
-        OCG.gen1(OCG.ASL * 32 + OCG.mDP, ORGI.RegAddr(x.r));
-        OCG.Dex;
-        OCG.gen1(OCG.BNE * 32 + OCG.mPCR, loopTop)
+      ELSE ORGI.load(x); shlReg(x.r, e)
       END
     ELSIF ORGI.IsLong(x.type) OR ORGI.IsLong(y.type) THEN ORGI.longCall(ORGFP.L_MUL, x, y, FALSE, FALSE)
+    ELSIF OCG.xops & (y.mode = ORB.Const) THEN ORGI.load(x); umlReg(x.r, y.a)
     ELSIF y.mode = ORB.Const THEN
       ORGI.load(x); ORGI.load(y); mulLoop(x.r, y.r);
       ORGI.RH := ORGI.RH - 1; x.r := ORGI.RH - 1;
       OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(x.r))
     ELSIF (x.mode = ORB.Const) & (x.a >= 2) & (log2(x.a, e) = 1) THEN
       IF ORGI.IsLong(y.type) THEN ORGI.load(y); longAsl(y.r, e); x.mode := ORGI.Reg; x.r := y.r
-      ELSE
-        ORGI.load(y); ORGI.Set16(TRUE, TRUE);
-        OCG.gen1(OCG.LDX * 32 + OCG.mImm, e);
-        loopTop := OCG.Here();
-        OCG.gen1(OCG.ASL * 32 + OCG.mDP, ORGI.RegAddr(y.r));
-        OCG.Dex;
-        OCG.gen1(OCG.BNE * 32 + OCG.mPCR, loopTop);
-        x.mode := ORGI.Reg; x.r := y.r
+      ELSE ORGI.load(y); shlReg(y.r, e); x.mode := ORGI.Reg; x.r := y.r
       END
+    ELSIF OCG.xops & (x.mode = ORB.Const) & ~ORGI.IsLong(y.type) THEN
+      ORGI.load(y); umlReg(y.r, x.a); x.mode := ORGI.Reg; x.r := y.r
     ELSE
       ORGI.load(x); ORGI.load(y); mulLoop(x.r, y.r);
       ORGI.RH := ORGI.RH - 1; x.r := ORGI.RH - 1;
@@ -624,11 +687,16 @@ MODULE ORGE FRIENDS ORG; (* 65C816 code generator, its expressions: type
      > 0, the quotient rounded down and the remainder never negative
      (genDivLoop alone is unsigned: -360 DIV 20 gave 3258). By ORGFP's
      I_DIV, shared by the module; inline, with the signs worked the same
-     way, if its fixups are full. *)
+     way, if its fixups are full. With the extension, DIV, which rounds
+     down: the quotient in A, the remainder in X. *)
   PROCEDURE intDiv(xr, yr, c: LONGINT; rem: BOOLEAN);
     VAR q, n, p1, p2, p3: LONGINT;
   BEGIN ORGI.Set16(TRUE, TRUE);
-    IF ORGFP.Room(ORGFP.I_DIV) THEN
+    IF OCG.xops THEN
+      OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(xr));
+      IF yr < 0 THEN OCG.X(OCG.xDIV * 32 + OCG.mImm, ORGI.Lo16(c)) ELSE OCG.X(OCG.xDIV * 32 + OCG.mDP, ORGI.RegAddr(yr)) END;
+      IF rem THEN OCG.gen1(OCG.STX * 32 + OCG.mDP, ORGI.RegAddr(xr)) ELSE OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(xr)) END
+    ELSIF ORGFP.Room(ORGFP.I_DIV) THEN
       OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(xr));
       OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGFP.FP_A_LO);
       IF yr < 0 THEN OCG.gen1(OCG.LDA * 32 + OCG.mImm, c) ELSE OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(yr)) END;
@@ -702,6 +770,7 @@ MODULE ORGE FRIENDS ORG; (* 65C816 code generator, its expressions: type
              procedure's result for one: load it *)
           ORGI.load(x); ORGI.Set16(TRUE, TRUE); i := 0;
           OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(x.r));
+          IF OCG.xops & (e < 16) THEN OCG.ShiftA(OCG.ASR, e); i := e END;
           WHILE i < e DO
             OCG.gen1(OCG.CMP * 32 + OCG.mImm, 8000H);
             OCG.gen1(OCG.ROR * 32 + OCG.mImpl, 0);

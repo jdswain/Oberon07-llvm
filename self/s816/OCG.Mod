@@ -62,6 +62,11 @@ MODULE OCG; (* 65C816 instruction encoder.
     TDC* = 78; TRB* = 79; TSB* = 80; TSC* = 81; TSX* = 82; TXA* = 83;
     TXS* = 84; TXY* = 85; TYA* = 86; TYX* = 87; WAI* = 88; WDM* = 89;
     XBA* = 90; XCE* = 91;
+    (* the core's extension after WDM (xops; Verilog65C816's docs/65C832.md):
+       a multiply or divide is $42 and the opcode of an ADC (MUL), AND
+       (UML), CMP (DIV) or EOR (UDV), X: the product's high word or the
+       remainder; ASR #n, A's shift with its sign, has no opcode of its own *)
+    xMUL* = ADC; xUML* = AND; xDIV* = CMP; xUDV* = EOR; ASR* = 92;
 
   TYPE
     Chunk = POINTER TO ChunkDesc;
@@ -81,6 +86,7 @@ MODULE OCG; (* 65C816 instruction encoder.
     reloc: Relocs;
     relocC: INTEGER;
     fault: BOOLEAN;            (* a fixed buffer (code/reloc) overflowed *)
+    xops*: BOOLEAN;            (* -x: code for the core with its extension after WDM *)
 
   (* --- byte emission --- *)
 
@@ -190,6 +196,7 @@ MODULE OCG; (* 65C816 instruction encoder.
   PROCEDURE Tcs*; BEGIN o(1BH) END Tcs;
   PROCEDURE Tax*; BEGIN o(0AAH) END Tax;
   PROCEDURE Rti*; BEGIN o(40H) END Rti;
+  PROCEDURE Txa*; BEGIN o(8AH) END Txa;
 
   (* --- mode optimisations (codegen_gen) --- *)
 
@@ -663,6 +670,29 @@ MODULE OCG; (* 65C816 instruction encoder.
   PROCEDURE gen2*(sel, v1, v2: LONGINT);
   BEGIN Gen(sel DIV 32, sel MOD 32, v1, v2)
   END gen2;
+
+  (* --- the extension after WDM (xops) --- *)
+
+  (* -x, for a driver in Oberon (main.c sets xops) *)
+  PROCEDURE SetXops*(on: BOOLEAN);
+  BEGIN xops := on
+  END SetXops;
+
+  (* a multiply or divide, sel xMUL, xUML, xDIV or xUDV * 32 and mDP or
+     mImm: $42, then that instruction *)
+  PROCEDURE X*(sel, v: LONGINT);
+  BEGIN o(42H); gen(sel DIV 32, sel MOD 32, v, 0)
+  END X;
+
+  (* A shifted n bits (0 < n < 16 of a 16-bit A) at once: op ASL, LSR, ASR
+     or ROL, ROR (not through C) *)
+  PROCEDURE ShiftA*(op, n: LONGINT);
+  BEGIN o(42H);
+    IF op = ASL THEN o(0AH) ELSIF op = LSR THEN o(4AH) ELSIF op = ASR THEN o(8AH)
+    ELSIF op = ROL THEN o(2AH) ELSE o(6AH)
+    END;
+    o(n)
+  END ShiftA;
 
   (* --- accessors for ORG --- *)
   PROCEDURE Here*(): LONGINT;         BEGIN RETURN pc END Here;

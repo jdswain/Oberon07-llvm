@@ -1103,6 +1103,17 @@ MODULE ORGI FRIENDS ORGE, ORG; (* 65C816 code generator, its items: the
     END
   END Field;
 
+  (* the cycles of Index's shifts and adds of an index by ts * 2^shifts
+     (ASL dp 7, CLC and ADC dp 6, LDA and STA 8) *)
+  PROCEDURE shiftAddCost(shifts, ts: LONGINT): LONGINT;
+    VAR c: LONGINT;
+  BEGIN c := 7 * shifts;
+    IF ts > 1 THEN c := c + 8; ts := ts DIV 2;
+      WHILE ts > 0 DO c := c + 7; IF ODD(ts) THEN c := c + 6 END; ts := ts DIV 2 END
+    END;
+    RETURN c
+  END shiftAddCost;
+
   PROCEDURE Index*(VAR x, y: Item);
     VAR s, lim, shifts, ts, idxReg, remaining, sb, i: LONGINT;
       runtime: BOOLEAN;
@@ -1142,7 +1153,12 @@ MODULE ORGI FRIENDS ORGE, ORG; (* 65C816 code generator, its items: the
       IF s > 1 THEN
         shifts := 0; ts := s;
         WHILE (ts > 1) & ~ODD(ts) DO ts := ts DIV 2; shifts := shifts + 1 END;
-        IF ts = 1 THEN
+        IF OCG.xops & (s < 10000H) & ((ts = 1) & (shifts >= 2) OR (ts > 1) & (shiftAddCost(shifts, ts) > 29)) THEN
+          (* the extension's ASL #n, or UML # (LDA, UML #, STA: 29 cycles) *)
+          OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(y.r));
+          IF ts = 1 THEN OCG.ShiftA(OCG.ASL, shifts) ELSE OCG.X(OCG.xUML * 32 + OCG.mImm, s) END;
+          OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(y.r))
+        ELSIF ts = 1 THEN
           i := 0;
           WHILE i < shifts DO OCG.gen1(OCG.ASL * 32 + OCG.mDP, RegAddr(y.r)); i := i + 1 END
         ELSE

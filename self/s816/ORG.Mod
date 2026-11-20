@@ -971,6 +971,12 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     END;
     IF y.mode = ORB.Const THEN
       IF y.a = 1 THEN OCG.gen1(op * 32 + OCG.mDP, ORGI.RegAddr(x.r))
+      ELSIF OCG.xops & (op # OCG.ROL) & (y.a > 1) & (y.a < 16) & OCG.LongA() & ~ORGI.IsLong(x.type) THEN
+        (* the extension's ASL or LSR #n (its ROL #n is not through C, as
+           ROL A is) *)
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(x.r));
+        OCG.ShiftA(op, y.a);
+        OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.RegAddr(x.r))
       ELSE
         OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(x.r));
         i := 0;
