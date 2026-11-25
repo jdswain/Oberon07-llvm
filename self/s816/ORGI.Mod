@@ -165,9 +165,11 @@ MODULE ORGI FRIENDS ORGE, ORG; (* 65C816 code generator, its items: the
 
   PROCEDURE CheckRegs*;
   BEGIN
-    Set16(TRUE, TRUE)
+    Set16(TRUE, TRUE);
     (* Reset at end of every statement: a statement start may be a branch
-       target and we must guarantee 16-bit A/index there. *)
+       target and we must guarantee 16-bit A/index there. The registers
+       from RH up are free: a store to one the peephole holds is not needed. *)
+    OCG.Dead(RegAddr(RH))
   END CheckRegs;
 
   PROCEDURE SetCC*(VAR x: Item; n: LONGINT);
@@ -312,6 +314,7 @@ MODULE ORGI FRIENDS ORGE, ORG; (* 65C816 code generator, its items: the
      before, which the chain's fixup would overwrite. *)
   PROCEDURE chain*(cond: LONGINT; type: ORB.Type; L: LONGINT): LONGINT;
   BEGIN
+    OCG.Dead(RegAddr(RH));   (* the condition made: the registers from RH up free *)
     IF cond # NV THEN emitBranch(cond, type, OCG.mFix, L); L := OCG.Here() - 2 END;
     RETURN L
   END chain;
@@ -562,10 +565,8 @@ MODULE ORGI FRIENDS ORGE, ORG; (* 65C816 code generator, its items: the
           x.r := RH; incR; incR
         ELSE   (* an INTEGER or a BYTE: the constant's low bits, of a wide one too *)
           IF x.type.size = 1 THEN
-            Set8(TRUE, FALSE);
-            OCG.gen1(OCG.LDA * 32 + OCG.mImm, x.a MOD 100H);
             Set16(TRUE, FALSE);
-            OCG.gen1(OCG.AND * 32 + OCG.mImm, 0FFH);
+            OCG.gen1(OCG.LDA * 32 + OCG.mImm, x.a MOD 100H);
             OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH))
           ELSE
             Set16(TRUE, TRUE);
@@ -585,9 +586,9 @@ MODULE ORGI FRIENDS ORGE, ORG; (* 65C816 code generator, its items: the
             OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH + 1));
             x.r := RH; incR; incR
           ELSIF x.type.size = 1 THEN
-            Set8(TRUE, FALSE);
-            OCG.gen1(OCG.LDA * 32 + OCG.mSR, x.a + frame);
+            (* a word read, the byte above the variable's too: the stack *)
             Set16(TRUE, FALSE);
+            OCG.gen1(OCG.LDA * 32 + OCG.mSR, x.a + frame);
             OCG.gen1(OCG.AND * 32 + OCG.mImm, 0FFH);
             OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH));
             x.r := RH; incR
@@ -610,10 +611,10 @@ MODULE ORGI FRIENDS ORGE, ORG; (* 65C816 code generator, its items: the
             OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH + 1));
             x.r := RH; incR; incR
           ELSIF x.type.size = 1 THEN
-            Set8(TRUE, FALSE);
+            (* a word read, the byte above the variable's too: the module's variables *)
+            Set16(TRUE, FALSE);
             OCG.gen1(OCG.LDY * 32 + OCG.mImm, x.a);
             OCG.gen1(OCG.LDA * 32 + OCG.mDPIndLY, sb);
-            Set16(TRUE, FALSE);
             OCG.gen1(OCG.AND * 32 + OCG.mImm, 0FFH);
             OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH));
             x.r := RH; incR
@@ -650,14 +651,14 @@ MODULE ORGI FRIENDS ORGE, ORG; (* 65C816 code generator, its items: the
           OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH + 1));
           x.r := RH; incR; incR
         ELSIF x.type.size = 1 THEN
-          Set8(TRUE, FALSE);
+          (* a word read, the byte above the variable's too: a variable's *)
+          Set16(TRUE, FALSE);
           IF x.b # 0 THEN
             OCG.gen1(OCG.LDY * 32 + OCG.mImm, x.b);
             OCG.gen1(OCG.LDA * 32 + OCG.mDPIndLY, RegAddr(RH))
           ELSE
             OCG.gen1(OCG.LDA * 32 + OCG.mDPIndL, RegAddr(RH))
           END;
-          Set16(TRUE, FALSE);
           OCG.gen1(OCG.AND * 32 + OCG.mImm, 0FFH);
           OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH));
           x.r := RH; incR
@@ -1275,8 +1276,8 @@ MODULE ORGI FRIENDS ORGE, ORG; (* 65C816 code generator, its items: the
         OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH + 1))
       END;
       IF check THEN
-        OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(RH));
-        OCG.gen1(OCG.ORA * 32 + OCG.mDP, RegAddr(RH + 1));
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(RH + 1));   (* the word last loaded first: in A *)
+        OCG.gen1(OCG.ORA * 32 + OCG.mDP, RegAddr(RH));
         Trap(NE, 4)
       END;
       x.r := RH; incR; incR
@@ -1298,8 +1299,8 @@ MODULE ORGI FRIENDS ORGE, ORG; (* 65C816 code generator, its items: the
       OCG.Pla;
       OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(RH + 1));
       IF check THEN
-        OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(RH));
-        OCG.gen1(OCG.ORA * 32 + OCG.mDP, RegAddr(RH + 1));
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(RH + 1));   (* the word last loaded first: in A *)
+        OCG.gen1(OCG.ORA * 32 + OCG.mDP, RegAddr(RH));
         Trap(NE, 4)
       END;
       x.r := RH; incR; incR
@@ -1317,8 +1318,8 @@ MODULE ORGI FRIENDS ORGE, ORG; (* 65C816 code generator, its items: the
       OCG.Pla;
       OCG.gen1(OCG.STA * 32 + OCG.mDP, RegAddr(x.r + 1));
       IF check THEN
-        OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(x.r));
-        OCG.gen1(OCG.ORA * 32 + OCG.mDP, RegAddr(x.r + 1));
+        OCG.gen1(OCG.LDA * 32 + OCG.mDP, RegAddr(x.r + 1));   (* the word last loaded first: in A *)
+        OCG.gen1(OCG.ORA * 32 + OCG.mDP, RegAddr(x.r));
         Trap(NE, 4)
       END
     ELSIF x.mode # Reg THEN ORS.Mark("bad mode in DeRef")
@@ -1627,6 +1628,7 @@ MODULE ORGI FRIENDS ORGE, ORG; (* 65C816 code generator, its items: the
   PROCEDURE CBJump*(VAR x: Item; L: LONGINT);
   BEGIN
     IF x.mode # Cond THEN loadCond(x) END;
+    OCG.Dead(RegAddr(RH));
     emitBranch(negated(x.r), x.origType, OCG.mPCR, L);
     FixLink(x.b);
     FixLinkWith(x.a, L)

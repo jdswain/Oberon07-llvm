@@ -1053,13 +1053,14 @@ MODULE ORGE FRIENDS ORG; (* 65C816 code generator, its expressions: type
     IF x.mode = ORGI.Cond THEN ORGI.load(x) END
   END Rel1;
   PROCEDURE IntRelation*(op: INTEGER; VAR x, y: ORGI.Item);
-    VAR isPointer, use8, useSigned, signedCmp: BOOLEAN;
+    VAR isPointer, use8, useSigned, signedCmp, unsignedFlags: BOOLEAN; cc: LONGINT;
   BEGIN
     ORGI.promoteConst(x, y); ORGI.widenToConst(x, y);
     IF y.mode = ORGI.Cond THEN ORGI.load(y) END;   (* while its flags are still there *)
     isPointer :=(x.type.form = ORB.Pointer) OR (x.type.form = ORB.NilTyp) OR (x.type.form = ORB.Proc);
     use8 := ~isPointer & ((x.type.form = ORB.Char) OR (x.type.form = ORB.Byte) OR (x.type.form = ORB.Bool));
     useSigned := ~isPointer & ~use8 & (x.type.form = ORB.Int);
+    cc := relmap[op - ORS.eql]; unsignedFlags := FALSE;
     IF isPointer THEN
       ORGI.Set16(TRUE, TRUE);
       IF (y.mode = ORB.Const) & (y.a = 0) & (y.type.form # ORB.Proc) THEN   (* NIL, not a procedure at 0 *)
@@ -1127,29 +1128,47 @@ MODULE ORGE FRIENDS ORG; (* 65C816 code generator, its expressions: type
            result), load then emitting nothing *)
         ORGI.load(x);
         OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(x.r));
-        IF (y.a # 0) OR ((op # ORS.eql) & (op # ORS.neq)) THEN
-          IF signedCmp THEN
-            OCG.Sec;
-            OCG.gen1(OCG.SBC * 32 + OCG.mImm, y.a)
-          ELSE
-            OCG.gen1(OCG.CMP * 32 + OCG.mImm, y.a)
-          END
+        IF signedCmp & (y.a = 0) & ((op = ORS.lss) OR (op = ORS.geq)) THEN
+          (* below 0 or not: x's sign, N *)
+          IF op = ORS.lss THEN cc := ORGI.MI ELSE cc := ORGI.PL END
+        ELSIF signedCmp THEN
+          (* x < y signed is x + 8000H < y + 8000H unsigned: both sign
+             bits inverted, the constant's here, and an unsigned compare *)
+          OCG.gen1(OCG.EOR * 32 + OCG.mImm, 8000H);
+          OCG.gen1(OCG.CMP * 32 + OCG.mImm, (y.a + 8000H) MOD 10000H);
+          unsignedFlags := TRUE
+        ELSIF (y.a # 0) OR ((op # ORS.eql) & (op # ORS.neq)) THEN
+          OCG.gen1(OCG.CMP * 32 + OCG.mImm, y.a)
         END;
         ORGI.RH := ORGI.RH - 1
       ELSE
         ORGI.load(x); ORGI.load(y);   (* a condition on the left was loaded by Rel1 *)
-        OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(x.r));
         IF signedCmp THEN
-          OCG.Sec;
-          OCG.gen1(OCG.SBC * 32 + OCG.mDP, ORGI.RegAddr(y.r))
+          (* x - y, its sign corrected when it overflowed: N is x < y;
+             x <= y is y >= x, y - x *)
+          IF (op = ORS.leq) OR (op = ORS.gtr) THEN
+            OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(y.r));
+            OCG.Sec;
+            OCG.gen1(OCG.SBC * 32 + OCG.mDP, ORGI.RegAddr(x.r));
+            IF op = ORS.leq THEN cc := ORGI.PL ELSE cc := ORGI.MI END
+          ELSE
+            OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(x.r));
+            OCG.Sec;
+            OCG.gen1(OCG.SBC * 32 + OCG.mDP, ORGI.RegAddr(y.r));
+            IF op = ORS.lss THEN cc := ORGI.MI ELSE cc := ORGI.PL END
+          END;
+          OCG.gen1(OCG.BVC * 32 + OCG.mPCR, OCG.Here() + 2 + 3);
+          OCG.gen1(OCG.EOR * 32 + OCG.mImm, 8000H)
         ELSE
+          OCG.gen1(OCG.LDA * 32 + OCG.mDP, ORGI.RegAddr(x.r));
           OCG.gen1(OCG.CMP * 32 + OCG.mDP, ORGI.RegAddr(y.r))
         END;
         ORGI.RH := ORGI.RH - 2
       END;
       IF use8 THEN ORGI.Set16(TRUE, TRUE) END
     END;
-    ORGI.SetCC(x, relmap[op - ORS.eql])
+    ORGI.SetCC(x, cc);
+    IF unsignedFlags THEN x.origType := ORB.setType END   (* emitBranch's unsigned forms *)
   END IntRelation;
 
   PROCEDURE RealRelation*(op: INTEGER; VAR x, y: ORGI.Item);

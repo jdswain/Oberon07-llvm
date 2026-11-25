@@ -31,6 +31,7 @@ extern void    ORB__AddSearchPath(const char *path, INTEGER len);
 extern BOOLEAN ORG__mapOn;
 extern BOOLEAN OCG__xops;
 extern BOOLEAN OCG__stock;
+extern BOOLEAN OCG__peep;
 
 /* Register a .smb search path. ORP__init must have run first (the ORB
  * module body zeroes the search-path table), so force the run-once init
@@ -41,7 +42,7 @@ static void AddSearchPath(const char *path) {
 }
 
 static void usage(const char *argv0) {
-    printf("Usage: %s <module.Mod> [-s] [-m] [-x | -816] [-I<dir>] [-I <dir>]\n", argv0);
+    printf("Usage: %s <module.Mod> [-s] [-m] [-x | -816] [-O0] [-I<dir>] [-I <dir>]\n", argv0);
     printf("  -s          Force new symbol file\n");
     printf("  -m          Write <module>.map: each procedure's code offset and name\n");
     printf("  -x          Code for the core with its extension after WDM (MUL, DIV,\n");
@@ -53,7 +54,7 @@ static void usage(const char *argv0) {
 
 int main(int argc, char **argv) {
     const char *filename = NULL;
-    BOOLEAN force = FALSE, map = FALSE, xops = FALSE, stock = FALSE;
+    BOOLEAN force = FALSE, map = FALSE, xops = FALSE, stock = FALSE, nopeep = FALSE;
     int i;
 
     if (argc < 2) { usage(argv[0]); return 1; }
@@ -68,6 +69,8 @@ int main(int argc, char **argv) {
             xops = TRUE;
         } else if (strcmp(argv[i], "-816") == 0) {
             stock = TRUE;
+        } else if (strcmp(argv[i], "-O0") == 0) {
+            nopeep = TRUE;
         } else if (strncmp(argv[i], "-I", 2) == 0) {
             if (argv[i][2] != '\0') {
                 AddSearchPath(&argv[i][2]);
@@ -91,6 +94,7 @@ int main(int argc, char **argv) {
     if (map) ORG__mapOn = TRUE;
     if (xops) OCG__xops = TRUE;
     if (stock) OCG__stock = TRUE;
+    if (nopeep) OCG__peep = FALSE;
     ORP__Compile(filename, (INTEGER)strlen(filename) + 1, force);
 
     if (ORS__errcnt > 0) {

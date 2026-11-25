@@ -32,6 +32,9 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     PtrSize* = ORGI.PtrSize;
     IntfcSize* = ORGI.IntfcSize;
 
+    (* a frame of this many bytes or fewer, even, made and freed a word at
+       a time, PHA and PLY, not by S's arithmetic *)
+    smallFrame = 6;
   TYPE Item* = ORGI.Item;
     (* a procedure in the map (-m): its code offset and name *)
     MapEntry = POINTER TO MapEntryDesc;
@@ -370,7 +373,11 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       OCG.gen1(OCG.LDA * 32 + OCG.mImm, 0);
       OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.BANK_DP)
     END;
-    IF frameSize > 0 THEN
+    IF (frameSize > 0) & (frameSize <= smallFrame) & ~ODD(frameSize) THEN
+      (* a small frame by PHA, a byte smaller and faster each word *)
+      n := frameSize;
+      WHILE n > 0 DO OCG.Pha; n := n - 2 END
+    ELSIF frameSize > 0 THEN
       OCG.Tsc;
       OCG.Sec;
       OCG.gen1(OCG.SBC * 32 + OCG.mImm, frameSize);
@@ -448,7 +455,10 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     IF form = ORB.Int THEN ORGI.cvt(x, ORGI.IsLong(proc.type.base)) END;
     IF form # ORB.NoTyp THEN ORGI.load(x) END;
     ORGI.Set16(TRUE, TRUE);
-    IF size > 0 THEN
+    IF (size > 0) & (size <= smallFrame) & ~ODD(size) THEN
+      (* a small frame by PLY: Y and the flags are not a result's *)
+      WHILE size > 0 DO OCG.gen1(OCG.PLY * 32 + OCG.mImpl, 0); size := size - 2 END
+    ELSIF size > 0 THEN
       OCG.Tsc;
       OCG.Clc;
       OCG.gen1(OCG.ADC * 32 + OCG.mImm, size);

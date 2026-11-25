@@ -35,6 +35,9 @@ MODULE OCG; (* 65C816 instruction encoder.
     (* code is held in chunks on the heap: a 65C816 module's variables are
        in bank 0, and an array is indexed within a bank *)
     ChunkSize = 8000H; maxChunks = 4;   (* maxCode DIV ChunkSize *)
+    (* the code generator's registers, words of the direct page (ORGI.RegAddr) *)
+    RegLo = 2; RegHi = 1FH;
+    maxHeld = 8;
 
     (* addressing modes — same order as the C AddrMode enum *)
     mAbs* = 0; mAcc* = 1; mAbsX* = 2; mAbsY* = 3; mAbsL* = 4;
@@ -73,6 +76,8 @@ MODULE OCG; (* 65C816 instruction encoder.
     ChunkDesc = RECORD b: ARRAY ChunkSize OF BYTE END;
     Relocs = POINTER TO RelocsDesc;
     RelocsDesc = RECORD r: ARRAY maxReloc OF LONGINT END;
+    (* an instruction the peephole holds back, its A and index widths *)
+    HeldInsn = RECORD op, mode, v1, v2: LONGINT; la, li: BOOLEAN END;
 
   VAR
     (* State is private (Oberon exports VARs read-only); ORG mutates it
@@ -88,6 +93,23 @@ MODULE OCG; (* 65C816 instruction encoder.
     fault: BOOLEAN;            (* a fixed buffer (code/reloc) overflowed *)
     xops*: BOOLEAN;            (* -x: code for the core with its extension after WDM *)
     stock*: BOOLEAN;           (* -816: code for a stock 65C816, its direct page and stack in bank 0 *)
+    (* the peephole (emit): the instructions held back after a store to a
+       register, held[0] that store, to pend; A's register (-1: none), and
+       whether N and Z are A's; the furthest place a branch was emitted
+       to ahead, by its bytes *)
+    peep*: BOOLEAN;            (* off: -O0 *)
+    held: ARRAY maxHeld OF HeldInsn;
+    nheld: INTEGER;
+    pend, aReg, fwdMax: LONGINT;
+    nzA: BOOLEAN;
+    (* each opcode's class, for the peephole: a an ALU result in A (N Z
+       A's), l LDA, s a shift or INC/DEC, S STA, z STZ STX STY, t TSB TRB,
+       n neither A nor N Z, c a branch on a condition, x N Z another's
+       (an index's, a compare's), r REP SEP XBA, B a jump, a call, a return
+       or the like; and each mode's: h no memory, d the direct page's, x
+       the direct page indexed, s the stack's, - another *)
+    cls: ARRAY 96 OF CHAR;
+    mcls: ARRAY 28 OF CHAR;
 
   (* --- byte emission --- *)
 
@@ -139,9 +161,14 @@ MODULE OCG; (* 65C816 instruction encoder.
   BEGIN o(op); o(v); IF b THEN o(v DIV 100H) END
   END om;
 
+  (* a branch or jump to v, a place ahead by its bytes: no peephole there *)
+  PROCEDURE ahead(v, len: LONGINT);
+  BEGIN IF (v > pc + len) & (v > fwdMax) THEN fwdMax := v END
+  END ahead;
+
   PROCEDURE orel(op, v: LONGINT);    (* 8-bit PC-relative branch *)
     VAR r: LONGINT;
-  BEGIN o(op); r := v - (pc + 1); o(r)
+  BEGIN ahead(v, 2); o(op); r := v - (pc + 1); o(r)
   END orel;
 
   PROCEDURE ofix(op, v: LONGINT);    (* forward-branch fixup chain (8-bit) *)
@@ -167,37 +194,6 @@ MODULE OCG; (* 65C816 instruction encoder.
   PROCEDURE omove(op, src, dst: LONGINT);
   BEGIN o(op); o(dst DIV 10000H); o(src DIV 10000H)
   END omove;
-
-  PROCEDURE Byte*(b: LONGINT);
-  BEGIN o(b)
-  END Byte;
-
-  PROCEDURE Word*(w: LONGINT);
-  BEGIN o(w); o(w DIV 100H)
-  END Word;
-
-  PROCEDURE Long*(l: LONGINT);
-  BEGIN o(l); o(l DIV 100H); o(l DIV 10000H); o(l DIV 1000000H)
-  END Long;
-
-  (* Narrow 0-arg emitters for implied 1-byte instructions. A full
-     Gen(op, mImpl, 0, 0) call compiles to ~23 bytes at the call site (4
-     constant args + JSR); one of these is ~3. ORG has 191 implied sites. *)
-  PROCEDURE Clc*; BEGIN o(18H) END Clc;
-  PROCEDURE Sec*; BEGIN o(38H) END Sec;
-  PROCEDURE Rts*; BEGIN o(60H) END Rts;
-  PROCEDURE Rtl*; BEGIN o(6BH) END Rtl;
-  PROCEDURE Pha*; BEGIN o(48H) END Pha;
-  PROCEDURE Pla*; BEGIN o(68H) END Pla;
-  PROCEDURE Dex*; BEGIN o(0CAH) END Dex;
-  PROCEDURE Phk*; BEGIN o(4BH) END Phk;
-  PROCEDURE Iny*; BEGIN o(0C8H) END Iny;
-  PROCEDURE Xba*; BEGIN o(0EBH) END Xba;
-  PROCEDURE Tsc*; BEGIN o(3BH) END Tsc;
-  PROCEDURE Tcs*; BEGIN o(1BH) END Tcs;
-  PROCEDURE Tax*; BEGIN o(0AAH) END Tax;
-  PROCEDURE Rti*; BEGIN o(40H) END Rti;
-  PROCEDURE Txa*; BEGIN o(8AH) END Txa;
 
   (* --- mode optimisations (codegen_gen) --- *)
 
@@ -361,7 +357,7 @@ MODULE OCG; (* 65C816 instruction encoder.
              was emitted as BRA with the offset wrapped to +127.) *)
           r := v1 - (pc + 2);
           IF (r > 127) OR (r < -128) THEN
-            brl := v1 - (pc + 3); ow(82H, brl)
+            ahead(v1, 3); brl := v1 - (pc + 3); ow(82H, brl)
           ELSE orel(80H, v1)
           END
         END
@@ -370,7 +366,7 @@ MODULE OCG; (* 65C816 instruction encoder.
         ELSIF mode = mImm THEN ob(00H, v1) END
     | BRL:
         IF mode = mFix THEN ofixl(82H, v1)
-        ELSIF isBr(mode) THEN r := v1 - (pc + 3); ow(82H, r) END
+        ELSIF isBr(mode) THEN ahead(v1, 3); r := v1 - (pc + 3); ow(82H, r) END
     | BVC:
         IF isBr(mode) THEN orel(50H, v1) END
     | BVS:
@@ -445,7 +441,7 @@ MODULE OCG; (* 65C816 instruction encoder.
     | INX: IF mode = mImpl THEN o(0E8H) END
     | INY: IF mode = mImpl THEN o(0C8H) END
     | JMP:
-        IF (mode = mDP) OR (mode = mAbs) THEN ow(4CH, v1)
+        IF (mode = mDP) OR (mode = mAbs) THEN ahead(v1, 3); ow(4CH, v1)
         ELSIF mode = mAbsInd THEN ow(6CH, v1)
         ELSIF mode = mAbsIndX THEN ow(7CH, v1)
         ELSIF mode = mAbsL THEN ol(5CH, v1)
@@ -647,6 +643,122 @@ MODULE OCG; (* 65C816 instruction encoder.
     END
   END gen;
 
+  (* --- the peephole: a store to a register held back ---
+
+     The code generator's registers are words of the direct page, RegLo
+     to RegHi, and a value goes through them: LDA x, STA r, then LDA r
+     for what is done with it. A store to a register is held back here,
+     with what follows it, until something reads the register or the
+     held instructions must be where they are, then emitted as it was:
+     the instructions are never reordered, only these left out:
+
+       an LDA r while A is r's value and N and Z are A's: A and the
+       flags are as the LDA would leave them;
+
+       the held store, when the register is stored again before
+       anything has read it (in between no branch, no label: a label is
+       Here's), or when the code generator says the register is free
+       (Dead: a statement's end).
+
+     A branch to a place computed ahead, Here() + n (a skip over the
+     next instructions), counts their bytes, so up to that place nothing
+     is held or left out (fwdMax). *)
+
+  PROCEDURE phys(op, mode, v1, v2: LONGINT; la, li: BOOLEAN);
+    VAR sa, si: BOOLEAN;
+  BEGIN sa := longa; si := longi; longa := la; longi := li;
+    gen(op, mode, v1, v2);
+    longa := sa; longi := si
+  END phys;
+
+  PROCEDURE isReg(v: LONGINT): BOOLEAN;
+  BEGIN RETURN (v >= RegLo) & (v <= RegHi)
+  END isReg;
+
+  (* the held instructions from k on emitted, held[0..k-1] left out *)
+  PROCEDURE release(k: INTEGER);
+  BEGIN
+    WHILE k < nheld DO
+      phys(held[k].op, held[k].mode, held[k].v1, held[k].v2, held[k].la, held[k].li); k := k + 1
+    END;
+    nheld := 0; pend := -1
+  END release;
+
+  PROCEDURE Flush*;
+  BEGIN IF nheld > 0 THEN release(0) END
+  END Flush;
+
+  (* the registers at lo and above are free: a held store to one left out *)
+  PROCEDURE Dead*(lo: LONGINT);
+  BEGIN
+    IF (nheld > 0) & (pend >= lo) THEN release(1) END;
+    IF aReg >= lo THEN aReg := -1 END
+  END Dead;
+
+  (* the instruction may read or write the direct page's p and p + 1 *)
+  PROCEDURE touches(mode, v1, p: LONGINT): BOOLEAN;
+    VAR c: CHAR;
+  BEGIN c := mcls[mode]
+    RETURN (c = "d") & (v1 >= p - 2) & (v1 <= p + 1) OR (c = "x")
+  END touches;
+
+  (* an instruction that can wait after a held store: no branch, no call,
+     the direct page or the stack its only memory (d,S near) *)
+  PROCEDURE holdable(op, mode, v1: LONGINT): BOOLEAN;
+    VAR c, m: CHAR;
+  BEGIN c := cls[op]; m := mcls[mode]
+    RETURN (c # "c") & (c # "B") & ((m = "h") OR (m = "d") OR (m = "s") & (v1 <= 255))
+  END holdable;
+
+  (* what the instruction does to A and to N and Z, by its class (cls) *)
+  PROCEDURE track(op, mode, v1: LONGINT);
+    VAR c: CHAR;
+  BEGIN c := cls[op];
+    IF c = "l" THEN
+      IF (mode = mDP) & longa & isReg(v1) THEN aReg := v1 ELSE aReg := -1 END;
+      nzA := TRUE
+    ELSIF c = "a" THEN aReg := -1; nzA := TRUE
+    ELSIF c = "s" THEN
+      IF (mode = mAcc) OR (mode = mImpl) THEN aReg := -1; nzA := TRUE
+      ELSE
+        IF (aReg >= 0) & touches(mode, v1, aReg) THEN aReg := -1 END;
+        nzA := FALSE
+      END
+    ELSIF c = "S" THEN
+      IF (mode = mDP) & longa & (v1 = aReg) THEN (* A is still the register's *)
+      ELSIF (mode = mDP) & longa & isReg(v1) THEN aReg := v1
+      ELSIF (aReg >= 0) & touches(mode, v1, aReg) THEN aReg := -1
+      END
+    ELSIF (c = "z") OR (c = "t") THEN
+      IF (aReg >= 0) & touches(mode, v1, aReg) THEN aReg := -1 END;
+      IF c = "t" THEN nzA := FALSE END
+    ELSIF c = "x" THEN nzA := FALSE
+    ELSIF (c = "n") OR (c = "c") THEN (* neither; a branch not taken: as before *)
+    ELSE aReg := -1; nzA := FALSE   (* r: REP, SEP, XBA; B: a jump, a call, ... *)
+    END
+  END track;
+
+  (* one instruction into the peephole *)
+  PROCEDURE emit(op, mode, v1, v2: LONGINT);
+  BEGIN
+    IF ~peep OR (pc < fwdMax) THEN
+      Flush; gen(op, mode, v1, v2); aReg := -1; nzA := FALSE
+    ELSIF (op = LDA) & (mode = mDP) & longa & (v1 = aReg) & nzA THEN (* left out *)
+    ELSIF (op = STA) & (mode = mDP) & longa & isReg(v1) THEN
+      IF (nheld > 0) & (pend = v1) THEN release(1)   (* the held store: stored again, unread *)
+      ELSE Flush
+      END;
+      held[0].op := op; held[0].mode := mode; held[0].v1 := v1; held[0].v2 := v2;
+      held[0].la := longa; held[0].li := longi; nheld := 1; pend := v1; aReg := v1
+    ELSIF (nheld > 0) & (nheld < maxHeld) & holdable(op, mode, v1) & ~touches(mode, v1, pend) THEN
+      held[nheld].op := op; held[nheld].mode := mode; held[nheld].v1 := v1; held[nheld].v2 := v2;
+      held[nheld].la := longa; held[nheld].li := longi; nheld := nheld + 1;
+      track(op, mode, v1)
+    ELSE
+      Flush; gen(op, mode, v1, v2); track(op, mode, v1)
+    END
+  END emit;
+
   (* codegen_gen: apply mode optimisations, then emit. *)
   PROCEDURE Gen*(op, mode, v1, v2: LONGINT);
   BEGIN
@@ -659,8 +771,41 @@ MODULE OCG; (* 65C816 instruction encoder.
     ELSIF mode = mAbsInd THEN
       IF isLongData(v1) THEN mode := mAbsIndL END
     END;
-    gen(op, mode, v1, v2)
+    emit(op, mode, v1, v2)
   END Gen;
+
+  (* bytes into the code as they are, not instructions: the peephole's
+     held instructions first, and after them nothing known of A *)
+  PROCEDURE Byte*(b: LONGINT);
+  BEGIN Flush; aReg := -1; nzA := FALSE; o(b)
+  END Byte;
+
+  PROCEDURE Word*(w: LONGINT);
+  BEGIN Flush; aReg := -1; nzA := FALSE; o(w); o(w DIV 100H)
+  END Word;
+
+  PROCEDURE Long*(l: LONGINT);
+  BEGIN Flush; aReg := -1; nzA := FALSE; o(l); o(l DIV 100H); o(l DIV 10000H); o(l DIV 1000000H)
+  END Long;
+
+  (* Narrow 0-arg emitters for implied 1-byte instructions. A full
+     Gen(op, mImpl, 0, 0) call compiles to ~23 bytes at the call site (4
+     constant args + JSR); one of these is ~3. ORG has 191 implied sites. *)
+  PROCEDURE Clc*; BEGIN emit(CLC, mImpl, 0, 0) END Clc;
+  PROCEDURE Sec*; BEGIN emit(SEC, mImpl, 0, 0) END Sec;
+  PROCEDURE Rts*; BEGIN emit(RTS, mImpl, 0, 0) END Rts;
+  PROCEDURE Rtl*; BEGIN emit(RTL, mImpl, 0, 0) END Rtl;
+  PROCEDURE Pha*; BEGIN emit(PHA, mImpl, 0, 0) END Pha;
+  PROCEDURE Pla*; BEGIN emit(PLA, mImpl, 0, 0) END Pla;
+  PROCEDURE Dex*; BEGIN emit(DEX, mImpl, 0, 0) END Dex;
+  PROCEDURE Phk*; BEGIN emit(PHK, mImpl, 0, 0) END Phk;
+  PROCEDURE Iny*; BEGIN emit(INY, mImpl, 0, 0) END Iny;
+  PROCEDURE Xba*; BEGIN emit(XBA, mImpl, 0, 0) END Xba;
+  PROCEDURE Tsc*; BEGIN emit(TSC, mImpl, 0, 0) END Tsc;
+  PROCEDURE Tcs*; BEGIN emit(TCS, mImpl, 0, 0) END Tcs;
+  PROCEDURE Tax*; BEGIN emit(TAX, mImpl, 0, 0) END Tax;
+  PROCEDURE Rti*; BEGIN emit(RTI, mImpl, 0, 0) END Rti;
+  PROCEDURE Txa*; BEGIN emit(TXA, mImpl, 0, 0) END Txa;
 
   (* Arity-narrowed entry points so ORG needn't pass unused operands: the
      instruction selector is packed as op*32 + mode (mode < 32), a compile-
@@ -692,13 +837,13 @@ MODULE OCG; (* 65C816 instruction encoder.
   (* a multiply or divide, sel xMUL, xUML, xDIV or xUDV * 32 and mDP or
      mImm: $42, then that instruction *)
   PROCEDURE X*(sel, v: LONGINT);
-  BEGIN o(42H); gen(sel DIV 32, sel MOD 32, v, 0)
+  BEGIN Flush; aReg := -1; nzA := FALSE; o(42H); gen(sel DIV 32, sel MOD 32, v, 0)
   END X;
 
   (* A shifted n bits (0 < n < 16 of a 16-bit A) at once: op ASL, LSR, ASR
      or ROL, ROR (not through C) *)
   PROCEDURE ShiftA*(op, n: LONGINT);
-  BEGIN o(42H);
+  BEGIN Flush; aReg := -1; nzA := FALSE; o(42H);
     IF op = ASL THEN o(0AH) ELSIF op = LSR THEN o(4AH) ELSIF op = ASR THEN o(8AH)
     ELSIF op = ROL THEN o(2AH) ELSE o(6AH)
     END;
@@ -706,15 +851,19 @@ MODULE OCG; (* 65C816 instruction encoder.
   END ShiftA;
 
   (* --- accessors for ORG --- *)
-  PROCEDURE Here*(): LONGINT;         BEGIN RETURN pc END Here;
-  PROCEDURE SetPc*(p: LONGINT);       BEGIN pc := p END SetPc;
+  (* a place in the code: perhaps a label, so the peephole's held
+     instructions there first, and nothing known of A *)
+  PROCEDURE Here*(): LONGINT;
+  BEGIN Flush; aReg := -1; nzA := FALSE; RETURN pc
+  END Here;
+  PROCEDURE SetPc*(p: LONGINT);       BEGIN Flush; aReg := -1; nzA := FALSE; pc := p END SetPc;
   (* Bounds-checked: after a code-buffer overflow the fixup chains embedded
      in `code` are truncated, so a chain walk could read/patch out of range.
      Get returns 0 (a chain terminator, so walks end) and Patch is a no-op;
      both set fault so Close refuses to emit. *)
   PROCEDURE Get*(at: LONGINT): INTEGER;
     VAR r: INTEGER;
-  BEGIN
+  BEGIN Flush;
     IF (at >= 0) & (at < maxCode) THEN
       IF code[at DIV ChunkSize] = NIL THEN r := 0 ELSE r := code[at DIV ChunkSize].b[at MOD ChunkSize] END
     ELSE fault := TRUE; r := 0
@@ -722,7 +871,7 @@ MODULE OCG; (* 65C816 instruction encoder.
     RETURN r
   END Get;
   PROCEDURE Patch*(at, b: LONGINT);
-  BEGIN
+  BEGIN Flush;
     IF (at >= 0) & (at < maxCode) THEN put(at, b) ELSE fault := TRUE END
   END Patch;
   PROCEDURE LongA*(): BOOLEAN;        BEGIN RETURN longa END LongA;
@@ -736,7 +885,7 @@ MODULE OCG; (* 65C816 instruction encoder.
   PROCEDURE SetLarge*(large: BOOLEAN);
   BEGIN IF large THEN codeLimit := maxCode - 512 ELSE codeLimit := maxCodeSmall END
   END SetLarge;
-  PROCEDURE RelCount*(): INTEGER;     BEGIN RETURN relocC END RelCount;
+  PROCEDURE RelCount*(): INTEGER;     BEGIN Flush; RETURN relocC END RelCount;
   PROCEDURE Rel*(i: INTEGER): LONGINT; BEGIN RETURN reloc.r[i] END Rel;
   PROCEDURE AddRel*(p: LONGINT);
   BEGIN addReloc(p)
@@ -756,11 +905,15 @@ MODULE OCG; (* 65C816 instruction encoder.
     END;
     pc := CodeOrg; longa := TRUE; longi := TRUE;
     dpage := 0; pbreg := 0; relocC := 0; fault := FALSE;
-    codeLimit := maxCodeSmall
+    codeLimit := maxCodeSmall;
+    nheld := 0; pend := -1; aReg := -1; nzA := FALSE; fwdMax := 0
   END Init;
 
 BEGIN NEW(reloc);
   pc := CodeOrg; longa := TRUE; longi := TRUE;
   dpage := 0; pbreg := 0; relocC := 0; fault := FALSE;
-  codeLimit := maxCodeSmall
+  codeLimit := maxCodeSmall;
+  peep := TRUE; nheld := 0; pend := -1; aReg := -1; nzA := FALSE; fwdMax := 0;
+  cls := "aascccxcccBBBccnnnnxBxxsxxasxxBBBBlxxsBBnannnnnnnnnnaxxBxxrssBBBannnrSBzzzxxxnattaxanxaxBBrBB";
+  mcls := "-h------d-xxddh-----dddhs-"
 END OCG.

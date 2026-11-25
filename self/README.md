@@ -36,7 +36,7 @@ cd s816 && make      # -> oc816    (65C816 backend; pure Oberon, no libLLVM)
 | Memory management | ARC | GC (mark/sweep, later stage) |
 | Output | `.ll` / `.o` | self-contained relocatable `.816` |
 
-`oc816 Module.Mod [-s] [-m] [-x | -816] [-I dir]`: `-s` allows a new
+`oc816 Module.Mod [-s] [-m] [-x | -816] [-O0] [-I dir]`: `-s` allows a new
 symbol file, `-m` writes `Module.map` (each procedure's code offset), and
 `-x` makes code for Verilog65C816's core with its extension after WDM
 (its `docs/65C832.md`; `OCG.xops`):
@@ -60,6 +60,18 @@ a stock 65C816, both in bank 0 and D any address there: a local's address
 has bank 0 (`ORGI.stackBank`), and a local beyond `d,S`'s 255 bytes is
 reached at `S + v - D` (`OCG.bigX`). It excludes `-x`; a stock 65C816 has
 no extension.
+
+The code generator's registers are words of the direct page, so a value
+goes through one: `LDA x`, `STA r`, then `LDA r` for what is done with it.
+`OCG`'s peephole holds a store to a register back, with the instructions
+after it, and leaves out an `LDA r` while A is still r's value, and the
+held store when r is stored again before anything reads it or the code
+generator frees r (`OCG.Dead`: a statement's end, a condition's branch).
+It never reorders, and leaves alone the bytes up to a branch whose place
+was counted ahead (`Here() + n`). `-O0` (`OCG.peep`) turns it off. With
+it, and a signed INTEGER compare by its sign bit, a byte read as a word,
+a small frame by `PHA`/`PLY` and a NIL test of the word in A, OS16's code
+is 9% smaller and runs 7-14% fewer cycles.
 
 The 816 loads every module into one bank; dynamic-dispatch vtables and
 interface itables use loader-filled absolute in-bank addresses. Type
