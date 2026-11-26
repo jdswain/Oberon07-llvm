@@ -1,0 +1,1 @@
+MODULE TwoVar; VAR x: INTEGER; y: INTEGER; BEGIN x := 5; y := 7 END TwoVar.

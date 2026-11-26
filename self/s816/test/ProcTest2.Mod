@@ -1,0 +1,13 @@
+MODULE ProcTest2;
+IMPORT SYSTEM;
+
+PROCEDURE PutByte(value: BYTE);
+CONST
+    ACIA_DATA = 0C000H;
+BEGIN
+    SYSTEM.PUT(0, ACIA_DATA, value);
+END PutByte;
+
+BEGIN
+    PutByte(5);
+END ProcTest2.

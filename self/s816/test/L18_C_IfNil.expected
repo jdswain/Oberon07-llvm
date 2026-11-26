@@ -1,0 +1,6 @@
+OK
+a
+before
+TRAP 4 at 03:F0B4
+  in L18_C_IfNil at +01B4
+  P 02 D 03CA S E836 code before it D0 02 00 04

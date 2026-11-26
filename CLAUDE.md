@@ -34,7 +34,7 @@ in-bank addresses.
 ## Verification
 
 - LLVM: `oc-self` output must stay byte-identical to `bin/oc` (diff `.ll`).
-- 816: `cd ../65/65Tools/oc && make test_self` (or
-  `OC=… ./test/run_self_tests.sh`) runs the em16 golden suite across all levels
-  plus OO (L16) and interface (L17) goldens. The C compiler there (`bin/oc`,
-  `run_level*_tests.sh`) is kept as a cross-check reference for now.
+- 816: `cd self/s816 && make test` (or `OC=… ./test/run_self_tests.sh`)
+  runs the em16 golden suite in `self/s816/test` across all levels plus OO
+  (L16) and interface (L17) goldens, on OS16 built beside this repository
+  (`../65/OS16`). OS16's own suite (`make suite` there) is the other check.

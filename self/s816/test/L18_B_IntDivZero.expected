@@ -1,0 +1,5 @@
+OK
+ 100
+TRAP 6 at 03:EF3E
+  in L18_B_IntDivZero at +003E
+  P 02 D 03CA S E836 code before it D0 02 00 06

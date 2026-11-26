@@ -94,11 +94,13 @@ interfaces read real offsets).
 
 - **LLVM:** `oc-self` output must stay byte-identical to `bin/oc` — compile a
   module with each and `diff` the `.ll`.
-- **816:** `cd ../../65/65Tools/oc && make test_self` runs the em16 golden
-  suite (all levels + L16 OO + L17 interfaces). Override the compiler with
-  `OC=/path/to/oc816`, and with `OCFLAGS=-x` for the extension's code
-  (L18_ArithSums checks its arithmetic). The C compiler in that repo
-  stays as a reference cross-check; see its `CLAUDE.md`.
+- **816:** `cd s816 && make test` runs the em16 golden suite in
+  `s816/test` (all levels + L16 OO + L17 interfaces) on OS16, which must
+  be built beside this repository (`../65/OS16`). Override the compiler
+  with `OC=/path/to/oc816`, and with `OCFLAGS=-x` for the extension's
+  code (L18_ArithSums checks its arithmetic). The suite came from
+  65Tools' `oc/test`; the C compiler there is the reference oc816 was
+  ported from.
 
 Design records live in `../doc/DDR-*.md` (interfaces: DDR-008; the ABI
 resolution for both backends is DDR-008 §6).

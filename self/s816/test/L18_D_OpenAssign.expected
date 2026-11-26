@@ -1,0 +1,6 @@
+OK
+   6  30
+ab  77
+TRAP 1 at 03:EFBB
+  in L18_D_OpenAssign at +00BB
+  P 03 D 03CA S E828 code before it 90 02 00 01

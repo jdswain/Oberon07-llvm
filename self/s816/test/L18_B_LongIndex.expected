@@ -1,0 +1,5 @@
+OK
+  13  22
+TRAP 1 at 03:F07D
+  in L18_B_LongIndex at +017D
+  P 00 D 03CA S E836 code before it F0 02 00 01

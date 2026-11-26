@@ -1,0 +1,9 @@
+MODULE L18_LIBase; (* for L18_LateImport *)
+  IMPORT Out;
+  TYPE D* = RECORD x*: INTEGER END; P* = POINTER TO D;
+    E* = POINTER TO ED; ED* = RECORD (D) y*: INTEGER END;
+  VAR k*: INTEGER;
+  PROCEDURE Show*(p: P); BEGIN Out.Int(p.x, 5) END Show;
+  PROCEDURE Get*(VAR d: D): INTEGER; BEGIN RETURN d.x END Get;
+BEGIN k := 7
+END L18_LIBase.

@@ -97,4 +97,9 @@ oc816: $(OBJS) $(RT_SMB)
 clean:
 	rm -f *.o *.smb *.ll *.deps oc816 ORH.Mod ORS.Mod ORB.Mod ORPS.Mod ORP.Mod
 
-.PHONY: all clean
+# The golden suite (test/run_self_tests.sh), each test run on OS16 under
+# em16 -fpga: OS16 and 65Tools beside this repository, OS16 built
+test: oc816
+	@bash test/run_self_tests.sh
+
+.PHONY: all clean test

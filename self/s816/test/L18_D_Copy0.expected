@@ -1,0 +1,6 @@
+OK
+0 ok
+1 ok
+TRAP 3 at 03:EFE2
+  in L18_D_Copy0 at +00E2
+  P 80 D 03CA S E836 code before it 10 02 00 03
