@@ -99,8 +99,13 @@ interfaces read real offsets).
   be built beside this repository (`../65/OS16`). Override the compiler
   with `OC=/path/to/oc816`, and with `OCFLAGS=-x` for the extension's
   code (L18_ArithSums checks its arithmetic). The suite came from
-  65Tools' `oc/test`; the C compiler there is the reference oc816 was
-  ported from.
+  65Tools' `oc/test`, written for the C compiler oc816 was ported from;
+  that compiler is in 65Tools' history only now.
+
+`s816/doc` has that compiler's notes, from 65Tools' `oc/doc`. `DP.md`,
+the direct page and the registers in it, is oc816's (its static base at
+`$42`); `RUNTIME.md`, `Fixup.md`, `Optimisations.md`, `ISSUES.md` and
+`DiskInterface.md` describe the C compiler and are older than oc816.
 
 Design records live in `../doc/DDR-*.md` (interfaces: DDR-008; the ABI
 resolution for both backends is DDR-008 §6).

@@ -234,7 +234,7 @@ Tests that verify the compiler correctly rejects invalid programs.
   levels can be named (`run_self_tests.sh L4 L9`)
 - `make test` (in `self/s816`) — the whole suite
 - The suite came from 65Tools' `oc/test` (as of 65Tools 275e1d0), where
-  it was first written for the C compiler
+  it was first written for the C compiler, now in 65Tools' history only
 
 ## Implementation Order
 

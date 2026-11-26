@@ -1,7 +1,7 @@
 #!/bin/bash
 # run_self_tests.sh — oc816's golden suite, each test run on OS16 under
-# em16 (make test, in self/s816). It came from 65Tools' oc/test, where
-# the C compiler it was first written for still is.
+# em16 (make test, in self/s816). It came from 65Tools' oc/test, written
+# first for the C compiler oc816 was ported from (in 65Tools' history).
 #
 # Usage:
 #   ./test/run_self_tests.sh [level ...]
