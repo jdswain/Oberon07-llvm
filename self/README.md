@@ -68,10 +68,21 @@ after it, and leaves out an `LDA r` while A is still r's value, and the
 held store when r is stored again before anything reads it or the code
 generator frees r (`OCG.Dead`: a statement's end, a condition's branch).
 It never reorders, and leaves alone the bytes up to a branch whose place
-was counted ahead (`Here() + n`). `-O0` (`OCG.peep`) turns it off. With
-it, and a signed INTEGER compare by its sign bit, a byte read as a word,
-a small frame by `PHA`/`PLY` and a NIL test of the word in A, OS16's code
-is 9% smaller and runs 7-14% fewer cycles.
+was counted ahead (`Here() + n`). With it, and a signed INTEGER compare by
+its sign bit, a byte read as a word, a small frame by `PHA`/`PLY` and a
+NIL test of the word in A, OS16's code is 9% smaller and runs 7-14% fewer
+cycles.
+
+A forward branch is made long, for a chain fixed later: a condition's
+branch is its inverse over a `BRL`. At a procedure's end (and the module
+body's, at `Close`) `OCG.Relax` makes such a pair one `Bcc`, and a lone
+`BRL` a `BRA`, where they reach and nothing branches into the bytes they
+lose; the code closes up, every branch and `PER` of the procedure is
+encoded again from where it went, the relocations move, and the code
+generator's own places (the far entries, the type descriptors' and
+itables' operands, the FP routines' calls) move by `OCG.NewPos`. OS16's
+code is 1.6% smaller again. `-O0` turns both off (`OCG.peep`,
+`OCG.relax`).
 
 The 816 loads every module into one bank; dynamic-dispatch vtables and
 interface itables use loader-filled absolute in-bank addresses. Type

@@ -343,7 +343,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
   PROCEDURE Enter*(proc, params: ORB.Object; parblksize, locblksize: LONGINT; intProc: BOOLEAN);
     VAR r, frameSize, n: LONGINT; param: ORB.Object;
       paramItem, regItem: ORGI.Item;
-  BEGIN MapProc(proc, params);
+  BEGIN OCG.BeginProc; MapProc(proc, params);
     frameSize := parblksize + locblksize;
     (* Methods always use the far (RTL) convention: dynamic dispatch reaches
        them via a long call and the vtable demands ONE uniform convention
@@ -444,6 +444,13 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
     ORGI.RH := 0
   END Enter;
 
+  (* the procedure's code relaxed (OCG.Relax): its places in the tables
+     moved with it *)
+  PROCEDURE relaxed;
+  BEGIN
+    IF OCG.Relax() THEN ORGI.Moved; ORGE.Moved; ORGFP.Moved END
+  END relaxed;
+
   (* Shared-frontend signature: (proc, x). form/size/expo/int from proc
      and the Enter stash. *)
   PROCEDURE Return*(proc: ORB.Object; VAR x: ORGI.Item);
@@ -476,6 +483,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       OCG.gen1(OCG.STA * 32 + OCG.mDP, ORGI.SB_DP)
     END;
     IF curExpo OR ORGI.largeMod THEN OCG.Rtl ELSE OCG.Rts END;
+    relaxed;
     ORGI.RH := 0
   END Return;
 
@@ -1370,7 +1378,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
 
   PROCEDURE Header*;
     VAR e: MapEntry;
-  BEGIN
+  BEGIN OCG.BeginProc;
     ORGI.entry := OCG.Here();
     IF mapOn THEN e := AddMap(ORGI.entry); e.name := "BEGIN" END;
     OCG.SetLongA(TRUE); OCG.SetLongI(TRUE);
@@ -1419,6 +1427,7 @@ MODULE ORG; (* 65C816 code generator — self-hosted port of 65Tools/oc/src/ORG.
       ORS.Mark("program too large: code or relocation table overflow")
     ELSE
       OCG.Rtl;   (* exit: emulator calls main with JSL, return with RTL *)
+      relaxed;
       ORGFP.EmitSubroutines; ORGFP.FixupCalls;
       wInfo.key := key; wInfo.nofent := nofent; wInfo.version := version;
       wInfo.varsize := ORGI.varsize; wInfo.strx := ORGI.strx; wInfo.tdx := ORGE.tdx; wInfo.entry := ORGI.entry;

@@ -1638,5 +1638,12 @@ MODULE ORGI FRIENDS ORGE, ORG; (* 65C816 code generator, its items: the
   BEGIN FixLink(x.a)
   END Fixup;
 
+  (* the procedure's code relaxed: the entries made in it moved *)
+  PROCEDURE Moved*;
+    VAR i: INTEGER;
+  BEGIN i := nofFar - 1;   (* in the order they were made: the procedure's last *)
+    WHILE (i >= 0) & (farEntry[i] >= OCG.RelaxedFrom()) DO farEntry[i] := OCG.NewPos(farEntry[i]); DEC(i) END
+  END Moved;
+
 BEGIN NEW(wa)
 END ORGI.

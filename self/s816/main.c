@@ -32,6 +32,7 @@ extern BOOLEAN ORG__mapOn;
 extern BOOLEAN OCG__xops;
 extern BOOLEAN OCG__stock;
 extern BOOLEAN OCG__peep;
+extern BOOLEAN OCG__relax;
 
 /* Register a .smb search path. ORP__init must have run first (the ORB
  * module body zeroes the search-path table), so force the run-once init
@@ -94,7 +95,7 @@ int main(int argc, char **argv) {
     if (map) ORG__mapOn = TRUE;
     if (xops) OCG__xops = TRUE;
     if (stock) OCG__stock = TRUE;
-    if (nopeep) OCG__peep = FALSE;
+    if (nopeep) { OCG__peep = FALSE; OCG__relax = FALSE; }
     ORP__Compile(filename, (INTEGER)strlen(filename) + 1, force);
 
     if (ORS__errcnt > 0) {

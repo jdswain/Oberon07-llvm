@@ -45,6 +45,13 @@ MODULE ORGFP; (* 65C816 floating-point subroutine library — companion to ORG.
     RETURN OCG.Here() - 1
   END emitFwdBranch;
 
+  (* the procedure's code relaxed (OCG.Relax): its calls' places moved *)
+  PROCEDURE Moved*;
+    VAR i: INTEGER;
+  BEGIN i := nFix - 1;   (* in the order they were made: the procedure's last *)
+    WHILE (i >= 0) & (fixAt[i] >= OCG.RelaxedFrom()) DO fixAt[i] := OCG.NewPos(fixAt[i]); DEC(i) END
+  END Moved;
+
   PROCEDURE Init*;
     VAR i: INTEGER;
   BEGIN full := FALSE; nFix := 0;

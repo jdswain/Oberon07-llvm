@@ -38,6 +38,7 @@ MODULE OCG; (* 65C816 instruction encoder.
     (* the code generator's registers, words of the direct page (ORGI.RegAddr) *)
     RegLo = 2; RegHi = 1FH;
     maxHeld = 8;
+    maxSites = 2048;   (* a procedure's branches, PERs and JMPs, for Relax *)
 
     (* addressing modes — same order as the C AddrMode enum *)
     mAbs* = 0; mAcc* = 1; mAbsX* = 2; mAbsY* = 3; mAbsL* = 4;
@@ -78,6 +79,16 @@ MODULE OCG; (* 65C816 instruction encoder.
     RelocsDesc = RECORD r: ARRAY maxReloc OF LONGINT END;
     (* an instruction the peephole holds back, its A and index widths *)
     HeldInsn = RECORD op, mode, v1, v2: LONGINT; la, li: BOOLEAN END;
+    (* Relax's: each site's place and target before the move, what is done
+       to it (0 nothing, 1 merged with the BRL after it, 2 made a BRA, 3
+       merged away), the targets sorted, and the bytes left out: where, and
+       how many up to there *)
+    Sites = POINTER TO SitesDesc;
+    SitesDesc = RECORD
+      at, to, tg, dpos: ARRAY maxSites OF LONGINT;
+      dcum: ARRAY maxSites OF INTEGER;
+      act: ARRAY maxSites OF BYTE
+    END;
 
   VAR
     (* State is private (Oberon exports VARs read-only); ORG mutates it
@@ -110,6 +121,14 @@ MODULE OCG; (* 65C816 instruction encoder.
        the direct page indexed, s the stack's, - another *)
     cls: ARRAY 96 OF CHAR;
     mcls: ARRAY 28 OF CHAR;
+    (* the procedure being compiled: its first place, its sites (Relax) *)
+    relax*: BOOLEAN;           (* off: -O0 *)
+    st: Sites;
+    nsite, ndel: INTEGER;
+    sitesFull: BOOLEAN;
+    relaxFrom: LONGINT;
+    relocFrom: INTEGER;        (* the procedure's first relocation *)
+    movedFrom: LONGINT;        (* where the code Relax last closed up began *)
 
   (* --- byte emission --- *)
 
@@ -161,6 +180,12 @@ MODULE OCG; (* 65C816 instruction encoder.
   BEGIN o(op); o(v); IF b THEN o(v DIV 100H) END
   END om;
 
+  (* a branch, PER or JMP at pc, for Relax *)
+  PROCEDURE site;
+  BEGIN
+    IF nsite < maxSites THEN st.at[nsite] := pc; nsite := nsite + 1 ELSE sitesFull := TRUE END
+  END site;
+
   (* a branch or jump to v, a place ahead by its bytes: no peephole there *)
   PROCEDURE ahead(v, len: LONGINT);
   BEGIN IF (v > pc + len) & (v > fwdMax) THEN fwdMax := v END
@@ -168,12 +193,12 @@ MODULE OCG; (* 65C816 instruction encoder.
 
   PROCEDURE orel(op, v: LONGINT);    (* 8-bit PC-relative branch *)
     VAR r: LONGINT;
-  BEGIN ahead(v, 2); o(op); r := v - (pc + 1); o(r)
+  BEGIN ahead(v, 2); site; o(op); r := v - (pc + 1); o(r)
   END orel;
 
   PROCEDURE ofix(op, v: LONGINT);    (* forward-branch fixup chain (8-bit) *)
     VAR ch: LONGINT;
-  BEGIN
+  BEGIN site;
     IF v = 0 THEN ow(op, 0)
     ELSE ch := v - pc; ow(op, ch MOD 100H)
     END
@@ -186,6 +211,7 @@ MODULE OCG; (* 65C816 instruction encoder.
        position, this operand is at pc+1). Intra-procedure, so |ch| < 32K fits
        16 bits even when the absolute positions exceed 64K. v = 0 is the
        empty/end sentinel. *)
+    site;
     IF v = 0 THEN ow(op, 0)
     ELSE ch := v - (pc + 1); ow(op, ch MOD 10000H)
     END
@@ -357,7 +383,7 @@ MODULE OCG; (* 65C816 instruction encoder.
              was emitted as BRA with the offset wrapped to +127.) *)
           r := v1 - (pc + 2);
           IF (r > 127) OR (r < -128) THEN
-            ahead(v1, 3); brl := v1 - (pc + 3); ow(82H, brl)
+            ahead(v1, 3); site; brl := v1 - (pc + 3); ow(82H, brl)
           ELSE orel(80H, v1)
           END
         END
@@ -366,7 +392,7 @@ MODULE OCG; (* 65C816 instruction encoder.
         ELSIF mode = mImm THEN ob(00H, v1) END
     | BRL:
         IF mode = mFix THEN ofixl(82H, v1)
-        ELSIF isBr(mode) THEN ahead(v1, 3); r := v1 - (pc + 3); ow(82H, r) END
+        ELSIF isBr(mode) THEN ahead(v1, 3); site; r := v1 - (pc + 3); ow(82H, r) END
     | BVC:
         IF isBr(mode) THEN orel(50H, v1) END
     | BVS:
@@ -441,7 +467,7 @@ MODULE OCG; (* 65C816 instruction encoder.
     | INX: IF mode = mImpl THEN o(0E8H) END
     | INY: IF mode = mImpl THEN o(0C8H) END
     | JMP:
-        IF (mode = mDP) OR (mode = mAbs) THEN ahead(v1, 3); ow(4CH, v1)
+        IF (mode = mDP) OR (mode = mAbs) THEN ahead(v1, 3); site; ow(4CH, v1)
         ELSIF mode = mAbsInd THEN ow(6CH, v1)
         ELSIF mode = mAbsIndX THEN ow(7CH, v1)
         ELSIF mode = mAbsL THEN ol(5CH, v1)
@@ -528,7 +554,11 @@ MODULE OCG; (* 65C816 instruction encoder.
     | PEI:
         IF mode = mDPInd THEN ob(0D4H, v1) END
     | PER:
-        IF (mode = mImm) OR (mode = mDP) OR (mode = mAbs) THEN ow(62H, v1) END
+        IF (mode = mImm) OR (mode = mDP) OR (mode = mAbs) THEN
+          (* a PER the loader fills (an import's address) is not relative *)
+          IF (relocC = 0) OR (reloc.r[relocC - 1] # pc) THEN site END;
+          ow(62H, v1)
+        END
     | PHA: IF mode = mImpl THEN o(48H) END
     | PHB: IF mode = mImpl THEN o(8BH) END
     | PHD: IF mode = mImpl THEN o(0BH) END
@@ -897,6 +927,175 @@ MODULE OCG; (* 65C816 instruction encoder.
   BEGIN RETURN fault
   END Faulted;
 
+  (* --- relaxation: a procedure's branches made short where they reach ---
+
+     A forward branch is made long, for a chain fixed later: a condition's
+     is its inverse over a BRL (Bcc' +3, BRL), which a fix that reaches
+     makes BRA and NOP. Every branch, PER and JMP of the procedure is noted
+     where it is (site); at its end (Relax) such a pair becomes one Bcc,
+     and a lone BRL, or BRA and NOP, a BRA, where they reach and nothing
+     branches into the bytes they lose. The code after them closes up;
+     every branch and PER of the procedure is encoded again, the
+     relocations moved, and NewPos tells the code generator where each of
+     its places is now. *)
+
+  PROCEDURE rd(p: LONGINT): LONGINT;
+  BEGIN RETURN code[p DIV ChunkSize].b[p MOD ChunkSize]
+  END rd;
+
+  (* where the branch, PER or JMP at p goes *)
+  PROCEDURE target(p: LONGINT): LONGINT;
+    VAR op, d: LONGINT;
+  BEGIN op := rd(p);
+    IF (op = 82H) OR (op = 62H) THEN   (* within the bank: a PER to a place 32K away wraps *)
+      d := p DIV 10000H * 10000H + (p + 3 + rd(p + 1) + rd(p + 2) * 100H) MOD 10000H
+    ELSIF op = 4CH THEN d := p DIV 10000H * 10000H + rd(p + 1) + rd(p + 2) * 100H
+    ELSE d := rd(p + 1); IF d >= 80H THEN d := d - 100H END; d := p + 2 + d
+    END
+    RETURN d
+  END target;
+
+  (* the place p of the procedure's code had before Relax, now *)
+  PROCEDURE NewPos*(p: LONGINT): LONGINT;
+    VAR lo, hi, m: INTEGER;
+  BEGIN lo := 0; hi := ndel;   (* the first left-out place at or above p: lo *)
+    WHILE lo < hi DO m := (lo + hi) DIV 2;
+      IF st.dpos[m] < p THEN lo := m + 1 ELSE hi := m END
+    END;
+    IF lo > 0 THEN p := p - st.dcum[lo - 1] END
+    RETURN p
+  END NewPos;
+
+  (* the bytes Relax would leave out, from st.act *)
+  PROCEDURE deletions;
+    VAR i: INTEGER; c: INTEGER;
+  BEGIN ndel := 0; c := 0;
+    FOR i := 0 TO nsite - 1 DO
+      IF st.act[i] = 1 THEN c := c + 3; st.dpos[ndel] := st.at[i] + 2; st.dcum[ndel] := c; ndel := ndel + 1
+      ELSIF st.act[i] = 2 THEN c := c + 1; st.dpos[ndel] := st.at[i] + 2; st.dcum[ndel] := c; ndel := ndel + 1
+      END
+    END
+  END deletions;
+
+  (* a target in [a, b): a branch into bytes that would be left out *)
+  PROCEDURE into(a, b: LONGINT): BOOLEAN;
+    VAR lo, hi, m: INTEGER;
+  BEGIN lo := 0; hi := nsite;
+    WHILE lo < hi DO m := (lo + hi) DIV 2;
+      IF st.tg[m] < a THEN lo := m + 1 ELSE hi := m END
+    END
+    RETURN (lo < nsite) & (st.tg[lo] < b)
+  END into;
+
+  (* a long branch: BRL, or a BRL a fix made BRA and NOP *)
+  PROCEDURE longBr(p: LONGINT): BOOLEAN;
+  BEGIN RETURN (rd(p) = 82H) OR (rd(p) = 80H) & (rd(p + 2) = 0EAH)
+  END longBr;
+
+  PROCEDURE fits(d: LONGINT): BOOLEAN;
+  BEGIN RETURN (d >= -128) & (d <= 127)
+  END fits;
+
+  (* the procedure's code, from BeginProc's place to pc, relaxed: TRUE if
+     it moved, NewPos then telling where its places are *)
+  PROCEDURE Relax*(): BOOLEAN;
+    VAR i, j, h, po, wo, n: INTEGER; s, t, d, p, w, oldpc, r, b: LONGINT; moved, flag: BOOLEAN;
+      ch: Chunk;
+  BEGIN Flush; ndel := 0; moved := FALSE; movedFrom := relaxFrom;
+    IF relax & ~sitesFull & ~fault & (nsite > 0) THEN
+      FOR i := 0 TO nsite - 1 DO st.to[i] := target(st.at[i]); st.tg[i] := st.to[i]; st.act[i] := 0 END;
+      (* the targets sorted (Shell's sort), for into *)
+      h := 1; WHILE h < nsite DIV 3 DO h := h * 3 + 1 END;
+      WHILE h > 0 DO
+        FOR i := h TO nsite - 1 DO t := st.tg[i]; j := i;
+          WHILE (j >= h) & (st.tg[j - h] > t) DO st.tg[j] := st.tg[j - h]; j := j - h END;
+          st.tg[j] := t
+        END;
+        h := h DIV 3
+      END;
+      (* what is shorter and reaches: as the bytes left out only bring a
+         branch's target nearer, one that reaches with its own left out
+         reaches with all of them (a pair's three bytes, a BRL's one) *)
+      i := 0;
+      WHILE i < nsite DO s := st.at[i];
+        IF (rd(s) MOD 20H = 10H) & (rd(s + 1) = 3) & (i + 1 < nsite) & (st.at[i + 1] = s + 2)
+            & longBr(s + 2) & ~into(s + 2, s + 5) THEN
+          t := st.to[i + 1];
+          IF (t > s) & fits(t - s - 5) OR (t <= s) & fits(t - s - 2) THEN
+            st.act[i] := 1; st.act[i + 1] := 3
+          END;
+          i := i + 1
+        ELSIF longBr(s) & ~into(s + 2, s + 3) THEN t := st.to[i];
+          IF (t > s) & fits(t - s - 3) OR (t <= s) & fits(t - s - 2) THEN st.act[i] := 2 END
+        END;
+        i := i + 1
+      END;
+      deletions;
+      IF ndel > 0 THEN
+        (* the code closed up *)
+        oldpc := pc; p := st.dpos[0]; w := p; j := 0;
+        WHILE p < oldpc DO
+          IF (j < ndel) & (p = st.dpos[j]) THEN
+            IF j = 0 THEN p := p + st.dcum[0] ELSE p := p + st.dcum[j] - st.dcum[j - 1] END;
+            j := j + 1
+          ELSE   (* up to the next byte left out *)
+            IF j < ndel THEN r := st.dpos[j] ELSE r := oldpc END;
+            IF (p DIV ChunkSize = (r - 1) DIV ChunkSize) & (w DIV ChunkSize = p DIV ChunkSize) THEN
+              (* within a chunk, as a procedure almost always is *)
+              ch := code[p DIV ChunkSize]; po := p MOD ChunkSize; wo := w MOD ChunkSize; n := r - p;
+              WHILE n > 0 DO ch.b[wo] := ch.b[po]; wo := wo + 1; po := po + 1; n := n - 1 END;
+              w := w + (r - p); p := r
+            ELSE
+              WHILE p < r DO
+                code[w DIV ChunkSize].b[w MOD ChunkSize] := code[p DIV ChunkSize].b[p MOD ChunkSize];
+                w := w + 1; p := p + 1
+              END
+            END
+          END
+        END;
+        pc := w; p := w; WHILE p < oldpc DO put(p, 0); p := p + 1 END;
+        (* every site encoded again *)
+        FOR i := 0 TO nsite - 1 DO
+          IF st.act[i] # 3 THEN
+            s := NewPos(st.at[i]);
+            IF st.act[i] = 1 THEN   (* the condition inverted: BPL BMI, BVC BVS, BCC BCS, BNE BEQ *)
+              t := NewPos(st.to[i + 1]); b := rd(s);
+              IF b DIV 20H MOD 2 = 0 THEN put(s, b + 20H) ELSE put(s, b - 20H) END
+            ELSE t := NewPos(st.to[i])
+            END;
+            IF st.act[i] = 2 THEN put(s, 80H) END;
+            b := rd(s);
+            IF (b = 82H) OR (b = 62H) THEN d := t - (s + 3); put(s + 1, d); put(s + 2, d DIV 100H)
+            ELSIF b = 4CH THEN put(s + 1, t); put(s + 2, t DIV 100H)
+            ELSE d := t - (s + 2); IF ~fits(d) THEN fault := TRUE END; put(s + 1, d)
+            END
+          END
+        END;
+        (* the relocations moved (bit 31 marks a bank's) *)
+        FOR i := relocFrom TO relocC - 1 DO r := reloc.r[i]; flag := (r < 0) OR (r > 7FFFFFFFH);   (* 32 bits or more *)
+          IF flag THEN r := r - 80000000H END;
+          IF r >= relaxFrom THEN r := NewPos(r) END;
+          IF flag THEN r := r + 80000000H END;
+          reloc.r[i] := r
+        END;
+        moved := TRUE
+      END
+    END;
+    fwdMax := 0; aReg := -1; nzA := FALSE;
+    nsite := 0; sitesFull := FALSE; relaxFrom := pc; relocFrom := relocC
+    RETURN moved
+  END Relax;
+
+  (* where the code Relax closed up started: the places from it on moved *)
+  PROCEDURE RelaxedFrom*(): LONGINT;
+  BEGIN RETURN movedFrom
+  END RelaxedFrom;
+
+  (* a procedure's code starts here: its sites from here on *)
+  PROCEDURE BeginProc*;
+  BEGIN Flush; nsite := 0; ndel := 0; sitesFull := FALSE; relaxFrom := pc; relocFrom := relocC
+  END BeginProc;
+
   PROCEDURE Init*;
     VAR k, i: LONGINT;
   BEGIN
@@ -906,10 +1105,11 @@ MODULE OCG; (* 65C816 instruction encoder.
     pc := CodeOrg; longa := TRUE; longi := TRUE;
     dpage := 0; pbreg := 0; relocC := 0; fault := FALSE;
     codeLimit := maxCodeSmall;
-    nheld := 0; pend := -1; aReg := -1; nzA := FALSE; fwdMax := 0
+    nheld := 0; pend := -1; aReg := -1; nzA := FALSE; fwdMax := 0;
+    nsite := 0; ndel := 0; sitesFull := FALSE; relaxFrom := 0; relocFrom := 0
   END Init;
 
-BEGIN NEW(reloc);
+BEGIN NEW(reloc); NEW(st); relax := TRUE; nsite := 0; ndel := 0; sitesFull := FALSE; relaxFrom := 0;
   pc := CodeOrg; longa := TRUE; longi := TRUE;
   dpage := 0; pbreg := 0; relocC := 0; fault := FALSE;
   codeLimit := maxCodeSmall;

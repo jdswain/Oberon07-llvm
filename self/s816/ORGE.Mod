@@ -1486,6 +1486,16 @@ MODULE ORGE FRIENDS ORG; (* 65C816 code generator, its expressions: type
     END
   END For2;
 
+  (* the procedure's code relaxed: the places to patch at Close moved *)
+  PROCEDURE Moved*;
+    VAR i: INTEGER;
+  BEGIN   (* in the order they were made: the procedure's last *)
+    i := tdRefC - 1;
+    WHILE (i >= 0) & (tdRefLoc[i] >= OCG.RelaxedFrom()) DO tdRefLoc[i] := OCG.NewPos(tdRefLoc[i]); DEC(i) END;
+    i := itabRefC - 1;
+    WHILE (i >= 0) & (itabRefLoc[i] >= OCG.RelaxedFrom()) DO itabRefLoc[i] := OCG.NewPos(itabRefLoc[i]); DEC(i) END
+  END Moved;
+
   (* --- CASE --- *)
   (* A LONGINT selector is two registers, both words compared *)
   PROCEDURE CaseLabel*(VAR x: ORGI.Item; val: LONGINT; VAR chain: LONGINT);
